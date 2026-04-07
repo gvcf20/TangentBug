@@ -1,0 +1,27 @@
+# Artefatos do colcon (caso alguém rode build aqui dentro por engano)
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+
+# C++
+*.o
+*.so
+*.a
+
+# Editores
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Arquivos grandes que não devem ir pro Git
+*.bag
+*.db3
+*.mcap
