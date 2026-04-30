@@ -1,0 +1,24 @@
+curve_follower:
+  ros__parameters:
+    # Tipo de curva: 'lemniscate' ou 'cardioid'
+    curve_type: 'lemniscate'
+
+    # Escala da curva (metade da extensão em x para a lemniscata)
+    curve_scale: 3.0
+
+    # Ganhos do campo vetorial
+    k_normal: 1.5         # convergência para a curva
+    k_tangent: 1.0        # circulação ao longo da curva
+    convergence_radius: 5.0
+
+    # Limites do robô
+    v_max: 0.4            # m/s
+    omega_max: 1.5        # rad/s
+    k_omega: 2.0          # ganho angular
+
+    # Taxa de controle
+    control_rate: 20.0    # Hz
+
+    # Logging
+    log_trajectory: true
+    log_file: '/tmp/curve_trajectory.csv'
