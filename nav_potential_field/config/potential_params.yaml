@@ -1,0 +1,24 @@
+potential_field:
+  ros__parameters:
+    # Ganhos
+    k_att: 1.0
+    k_rep: 0.8              # aumentado (era 0.5) — repele mais forte
+    d0: 2.0                 # aumentado (era 1.5) — detecta obstáculo mais cedo
+    d_threshold: 2.0
+
+    # Navegação
+    goal_tolerance: 0.2
+
+    # Controle
+    v_max: 0.4
+    omega_max: 1.5
+    k_omega: 2.0
+    control_rate: 20.0
+
+    # Wall-following (anti mínimo local)
+    wall_follow_distance: 0.6    # distância da parede durante wall-follow (m)
+    wall_follow_duration: 5.0    # segundos em wall-follow antes de voltar
+
+    # Logging
+    log_trajectory: true
+    log_file: '/tmp/potential_field_trajectory.csv'

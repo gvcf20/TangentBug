@@ -1,0 +1,1 @@
+"""nav_potential_field: navegação por campo potencial atrativo + repulsivo."""
