@@ -47,12 +47,21 @@ def compute_repulsive(scan: LaserScan,
         # Ignora feixes fora da zona de influência
         if d >= d0:
             continue
+        front_limit = math.radians(120)
 
         # Ângulo do feixe no frame do laser
         angle_laser = scan.angle_min + i * scan.angle_increment
 
-        # Magnitude da força repulsiva (fórmula clássica)
+        if abs(angle_laser) > front_limit:
+            continue
+
+        d_min = 0.20
+        f_rep_max = 5
+
+        d = max(d, d_min)
         magnitude = k_rep * (1.0 / d - 1.0 / d0) / (d * d)
+        
+        magnitude = min(magnitude, f_rep_max)
 
         # Direção: do obstáculo para o robô = oposta ao feixe
         # No frame do laser, o feixe aponta para (cos(angle), sin(angle))

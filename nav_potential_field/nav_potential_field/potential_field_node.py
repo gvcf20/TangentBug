@@ -39,17 +39,17 @@ class PotentialFieldNode(Node):
         super().__init__('potential_field')
 
         # Parâmetros
-        self.declare_parameter('k_att', 1.0)
-        self.declare_parameter('k_rep', 0.5)
-        self.declare_parameter('d0', 1.5)
-        self.declare_parameter('d_threshold', 2.0)
+        self.declare_parameter('k_att', 0.5)
+        self.declare_parameter('k_rep', 0.3)
+        self.declare_parameter('d0', 0.8)
+        self.declare_parameter('d_threshold', 1.5)
         self.declare_parameter('goal_tolerance', 0.2)
-        self.declare_parameter('v_max', 0.4)
-        self.declare_parameter('omega_max', 1.5)
-        self.declare_parameter('k_omega', 2.0)
-        self.declare_parameter('control_rate', 20.0)
-        self.declare_parameter('wall_follow_distance', 0.6)
-        self.declare_parameter('wall_follow_duration', 5.0)
+        self.declare_parameter('v_max', 0.3)
+        self.declare_parameter('omega_max', 1.0)
+        self.declare_parameter('k_omega', 1.0)
+        self.declare_parameter('control_rate', 10.0)
+        self.declare_parameter('wall_follow_distance', 0.3)
+        self.declare_parameter('wall_follow_duration', 3.0)
         self.declare_parameter('log_trajectory', True)
         self.declare_parameter('log_file', '/tmp/potential_field_trajectory.csv')
 
@@ -153,7 +153,7 @@ class PotentialFieldNode(Node):
             (self.goal_x, self.goal_y))
 
         # Atualiza melhor distância (para detectar progresso real)
-        if dist_to_goal < self.best_dist_to_goal - 0.05:
+        if dist_to_goal < self.best_dist_to_goal - 0.1:
             self.best_dist_to_goal = dist_to_goal
             self._reset_stuck()
 
@@ -236,8 +236,8 @@ class PotentialFieldNode(Node):
                 dy = self.goal_y - self.robot_y
                 d = math.hypot(dx, dy)
                 if d > 1e-6:
-                    fx += self.perturb_direction * (-dy / d) * 1.5
-                    fy += self.perturb_direction * (dx / d) * 1.5
+                    fx += self.perturb_direction * (-dy / d) * 0.5
+                    fy += self.perturb_direction * (dx / d) * 0.5
 
             elif elapsed > 3.0:
                 # Nível 1: perturbação leve
@@ -249,8 +249,8 @@ class PotentialFieldNode(Node):
                 dy = self.goal_y - self.robot_y
                 d = math.hypot(dx, dy)
                 if d > 1e-6:
-                    fx += self.perturb_direction * (-dy / d) * 0.7
-                    fy += self.perturb_direction * (dx / d) * 0.7
+                    fx += self.perturb_direction * (-dy / d) * 0.3
+                    fy += self.perturb_direction * (dx / d) * 0.3
 
         return force_to_twist(
             fx, fy, self.robot_yaw,
@@ -344,21 +344,33 @@ class PotentialFieldNode(Node):
         marker.color = ColorRGBA(r=0.0, g=1.0, b=0.0, a=1.0)
         self.pub_marker.publish(marker)
 
-    def destroy_node(self):
-        self.pub_cmd.publish(Twist())
-        if self.logger_traj:
-            self.logger_traj.close()
-        super().destroy_node()
+    def main(args=None):
+        rclpy.init(args=args)
+        node = PotentialFieldNode()
+        try:
+            rclpy.spin(node)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            node.destroy_node()
+            rclpy.shutdown()
 
 
 def main(args=None):
     rclpy.init(args=args)
     node = PotentialFieldNode()
+
     try:
         rclpy.spin(node)
+
     except KeyboardInterrupt:
         pass
+
     finally:
+        # para o robô antes do shutdown
+        if rclpy.ok():
+            node.pub_cmd.publish(Twist())
+
         node.destroy_node()
         rclpy.shutdown()
 
