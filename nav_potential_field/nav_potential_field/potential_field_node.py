@@ -10,370 +10,674 @@ Inclui mecanismo anti-mínimo-local em 3 níveis:
 """
 
 import math
+from enum import Enum
+from collections import deque
+
 import rclpy
 from rclpy.node import Node
+
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
-from geometry_msgs.msg import Twist, PoseStamped
+from geometry_msgs.msg import Twist
+from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import Vector3
 from visualization_msgs.msg import Marker
-from std_msgs.msg import ColorRGBA
 
-from nav_common.geometry import yaw_from_quaternion, distance, wrap_to_pi
-from nav_common.diff_drive import force_to_twist
-from nav_common.laser_utils import closest_obstacle
-from nav_common.plotting import TrajectoryLogger
+from nav_common.geometry import (
+    yaw_from_quaternion,
+    wrap_to_pi,
+)
 
-from nav_potential_field.attractive import compute_attractive
-from nav_potential_field.repulsive import compute_repulsive
+from nav_potential_field.attractive import (
+    compute_attractive,
+)
 
+from nav_potential_field.repulsive import (
+    compute_repulsive,
+)
+
+
+# ============================================================
+# FSM
+# ============================================================
+
+class NavState(Enum):
+    IDLE = 0
+    GO_TO_GOAL = 1
+    ESCAPE = 2
+    WALL_FOLLOW = 3
+    GOAL_REACHED = 4
+
+
+# ============================================================
+# NODE
+# ============================================================
 
 class PotentialFieldNode(Node):
 
-    # Estados do anti-stuck
-    STATE_NORMAL = 'normal'
-    STATE_PERTURB_1 = 'perturb_light'
-    STATE_PERTURB_2 = 'perturb_strong'
-    STATE_WALL_FOLLOW = 'wall_follow'
-
     def __init__(self):
-        super().__init__('potential_field')
 
-        # Parâmetros
-        self.declare_parameter('k_att', 0.5)
-        self.declare_parameter('k_rep', 0.3)
-        self.declare_parameter('d0', 0.8)
-        self.declare_parameter('d_threshold', 1.5)
-        self.declare_parameter('goal_tolerance', 0.2)
-        self.declare_parameter('v_max', 0.3)
-        self.declare_parameter('omega_max', 1.0)
-        self.declare_parameter('k_omega', 1.0)
-        self.declare_parameter('control_rate', 10.0)
-        self.declare_parameter('wall_follow_distance', 0.3)
-        self.declare_parameter('wall_follow_duration', 3.0)
-        self.declare_parameter('log_trajectory', True)
-        self.declare_parameter('log_file', '/tmp/potential_field_trajectory.csv')
+        super().__init__("potential_field")
 
-        # Lê parâmetros
-        self.k_att = self.get_parameter('k_att').value
-        self.k_rep = self.get_parameter('k_rep').value
-        self.d0 = self.get_parameter('d0').value
-        self.d_threshold = self.get_parameter('d_threshold').value
-        self.goal_tolerance = self.get_parameter('goal_tolerance').value
-        self.v_max = self.get_parameter('v_max').value
-        self.omega_max = self.get_parameter('omega_max').value
-        self.k_omega = self.get_parameter('k_omega').value
-        control_rate = self.get_parameter('control_rate').value
-        self.wall_follow_dist = self.get_parameter('wall_follow_distance').value
-        self.wall_follow_duration = self.get_parameter('wall_follow_duration').value
+        # ========================================================
+        # PARAMETERS
+        # ========================================================
 
-        # Estado do robô
+        self.declare_parameter("control_rate", 20.0)
+
+        self.declare_parameter("k_att", 1.2)
+        self.declare_parameter("k_rep", 0.9)
+
+        self.declare_parameter("d0", 1.2)
+
+        self.declare_parameter("goal_tolerance", 0.15)
+
+        self.declare_parameter("max_linear", 0.45)
+        self.declare_parameter("max_angular", 1.8)
+
+        self.declare_parameter("escape_gain", 1.5)
+
+        self.declare_parameter("enable_tangential", True)
+        self.declare_parameter("tangential_gain", 0.35)
+
+        self.declare_parameter("smoothing_alpha", 0.75)
+
+        self.declare_parameter("stuck_timeout", 4.0)
+
+        self.declare_parameter("wall_follow_time", 4.0)
+
+        self.declare_parameter("front_safety_distance", 0.22)
+
+        # ========================================================
+        # LOAD
+        # ========================================================
+
+        self.control_rate = self.get_parameter(
+            "control_rate").value
+
+        self.k_att = self.get_parameter(
+            "k_att").value
+
+        self.k_rep = self.get_parameter(
+            "k_rep").value
+
+        self.d0 = self.get_parameter(
+            "d0").value
+
+        self.goal_tolerance = self.get_parameter(
+            "goal_tolerance").value
+
+        self.max_linear = self.get_parameter(
+            "max_linear").value
+
+        self.max_angular = self.get_parameter(
+            "max_angular").value
+
+        self.escape_gain = self.get_parameter(
+            "escape_gain").value
+
+        self.enable_tangential = self.get_parameter(
+            "enable_tangential").value
+
+        self.tangential_gain = self.get_parameter(
+            "tangential_gain").value
+
+        self.smoothing_alpha = self.get_parameter(
+            "smoothing_alpha").value
+
+        self.stuck_timeout = self.get_parameter(
+            "stuck_timeout").value
+
+        self.wall_follow_time = self.get_parameter(
+            "wall_follow_time").value
+
+        self.front_safety_distance = self.get_parameter(
+            "front_safety_distance").value
+
+        # ========================================================
+        # ROBOT STATE
+        # ========================================================
+
         self.robot_x = 0.0
         self.robot_y = 0.0
         self.robot_yaw = 0.0
-        self.odom_received = False
-        self.last_scan = None
 
-        # Meta
+        self.scan = None
+
         self.goal_x = None
         self.goal_y = None
-        self.goal_active = False
-        self.goal_reached = False
 
-        # Anti mínimo local
-        self.stuck_state = self.STATE_NORMAL
-        self.last_progress_x = 0.0
-        self.last_progress_y = 0.0
-        self.last_progress_time = 0.0
-        self.stuck_start_time = 0.0
-        self.perturb_direction = 1.0  # +1 ou -1 (esquerda/direita)
-        self.wall_follow_start_time = 0.0
-        self.best_dist_to_goal = float('inf')
+        self.has_odom = False
+        self.has_scan = False
+        self.has_goal = False
 
-        # Subscribers
-        self.sub_odom = self.create_subscription(
-            Odometry, '/odom', self.odom_callback, 10)
-        self.sub_scan = self.create_subscription(
-            LaserScan, '/scan', self.scan_callback,
+        # ========================================================
+        # FSM
+        # ========================================================
+
+        self.state = NavState.IDLE
+
+        # ========================================================
+        # FORCE FILTER
+        # ========================================================
+
+        self.filtered_fx = 0.0
+        self.filtered_fy = 0.0
+
+        # ========================================================
+        # STUCK DETECTION
+        # ========================================================
+
+        self.progress_history = deque(maxlen=60)
+
+        self.escape_direction = 1.0
+
+        self.escape_start_time = 0.0
+
+        # ========================================================
+        # SUBSCRIBERS
+        # ========================================================
+
+        self.create_subscription(
+            Odometry,
+            "/odom",
+            self.odom_callback,
+            10,
+        )
+
+        self.create_subscription(
+            LaserScan,
+            "/scan",
+            self.scan_callback,
             rclpy.qos.QoSProfile(
                 depth=5,
-                reliability=rclpy.qos.ReliabilityPolicy.BEST_EFFORT))
-        self.sub_goal = self.create_subscription(
-            PoseStamped, '/goal_pose', self.goal_callback, 10)
+                reliability=rclpy.qos.ReliabilityPolicy.BEST_EFFORT
+            )
+        )
 
-        # Publishers
-        self.pub_cmd = self.create_publisher(Twist, '/cmd_vel', 10)
-        self.pub_marker = self.create_publisher(Marker, '/potential_markers', 10)
+        self.create_subscription(
+            PoseStamped,
+            "/goal_pose",
+            self.goal_callback,
+            10,
+        )
 
-        # Timer de controle
-        period = 1.0 / control_rate
-        self.control_timer = self.create_timer(period, self.control_loop)
+        # ========================================================
+        # PUBLISHERS
+        # ========================================================
 
-        # Logger
-        self.logger_traj = None
-        if self.get_parameter('log_trajectory').value:
-            log_file = self.get_parameter('log_file').value
-            self.logger_traj = TrajectoryLogger(
-                log_file, extra_fields=['dist_to_goal', 'state'])
-            self.get_logger().info(f'Logging em: {log_file}')
+        self.cmd_pub = self.create_publisher(
+            Twist,
+            "/cmd_vel",
+            10,
+        )
+
+        self.marker_pub = self.create_publisher(
+            Marker,
+            "/pf_debug",
+            10,
+        )
+
+        # ========================================================
+        # TIMER
+        # ========================================================
+
+        self.timer = self.create_timer(
+            1.0 / self.control_rate,
+            self.control_loop,
+        )
 
         self.get_logger().info(
-            'Potential field pronto. Envie meta via RViz "2D Goal Pose" '
-            'ou: ros2 topic pub /goal_pose geometry_msgs/msg/PoseStamped '
-            '"{header: {frame_id: odom}, pose: {position: {x: 5.0, y: 3.0}}}"')
+            "Potential Field Improved Node Started"
+        )
 
-    def odom_callback(self, msg: Odometry):
+    # ============================================================
+    # CALLBACKS
+    # ============================================================
+
+    def odom_callback(self, msg):
+
         self.robot_x = msg.pose.pose.position.x
         self.robot_y = msg.pose.pose.position.y
-        self.robot_yaw = yaw_from_quaternion(msg.pose.pose.orientation)
-        self.odom_received = True
 
-    def scan_callback(self, msg: LaserScan):
-        self.last_scan = msg
+        self.robot_yaw = yaw_from_quaternion(
+            msg.pose.pose.orientation
+        )
 
-    def goal_callback(self, msg: PoseStamped):
+        self.has_odom = True
+
+    def scan_callback(self, msg):
+
+        self.scan = msg
+        self.has_scan = True
+
+    def goal_callback(self, msg):
+
         self.goal_x = msg.pose.position.x
         self.goal_y = msg.pose.position.y
-        self.goal_active = True
-        self.goal_reached = False
-        self._reset_stuck()
-        self.best_dist_to_goal = float('inf')
+
+        self.has_goal = True
+
+        self.state = NavState.GO_TO_GOAL
+
+        self.progress_history.clear()
 
         self.get_logger().info(
-            f'Nova meta: ({self.goal_x:.2f}, {self.goal_y:.2f})')
-        self.publish_goal_marker()
+            f"Goal received: "
+            f"({self.goal_x:.2f}, {self.goal_y:.2f})"
+        )
+
+    # ============================================================
+    # MAIN LOOP
+    # ============================================================
 
     def control_loop(self):
-        if not self.odom_received or self.last_scan is None:
+
+        if not (
+            self.has_odom
+            and self.has_scan
+            and self.has_goal
+        ):
             return
-        if not self.goal_active or self.goal_reached:
-            return
 
-        dist_to_goal = distance(
-            (self.robot_x, self.robot_y),
-            (self.goal_x, self.goal_y))
+        # ========================================================
+        # GOAL CHECK
+        # ========================================================
 
-        # Atualiza melhor distância (para detectar progresso real)
-        if dist_to_goal < self.best_dist_to_goal - 0.1:
-            self.best_dist_to_goal = dist_to_goal
-            self._reset_stuck()
+        goal_dist = math.hypot(
+            self.goal_x - self.robot_x,
+            self.goal_y - self.robot_y,
+        )
 
-        # Chegou?
-        if dist_to_goal < self.goal_tolerance:
-            self.pub_cmd.publish(Twist())
-            self.goal_reached = True
-            self.goal_active = False
-            self.stuck_state = self.STATE_NORMAL
+        if goal_dist < self.goal_tolerance:
+
+            self.stop_robot()
+
+            self.state = NavState.GOAL_REACHED
+
             self.get_logger().info(
-                f'Meta alcançada! Distância final: {dist_to_goal:.3f} m')
+                "Goal reached."
+            )
+
             return
 
-        # Escolhe comportamento baseado no estado
-        if self.stuck_state == self.STATE_WALL_FOLLOW:
-            twist = self._wall_follow_control()
+        # ========================================================
+        # STUCK CHECK
+        # ========================================================
+
+        self.update_progress(goal_dist)
+
+        # ========================================================
+        # FSM
+        # ========================================================
+
+        if self.state == NavState.GO_TO_GOAL:
+
+            twist = self.go_to_goal_controller()
+
+        elif self.state == NavState.ESCAPE:
+
+            twist = self.escape_controller()
+
+        elif self.state == NavState.WALL_FOLLOW:
+
+            twist = self.wall_follow_controller()
+
         else:
-            twist = self._potential_field_control(dist_to_goal)
 
-        self.pub_cmd.publish(twist)
+            twist = Twist()
 
-        # Log
-        if self.logger_traj:
-            self.logger_traj.log(
-                self.robot_x, self.robot_y, self.robot_yaw,
-                dist_to_goal=round(dist_to_goal, 4),
-                state=self.stuck_state)
+        self.cmd_pub.publish(twist)
 
-    def _potential_field_control(self, dist_to_goal: float) -> Twist:
-        """Controle normal por campo potencial, com perturbações se preso."""
-        now = self.get_clock().now().nanoseconds / 1e9
+    # ============================================================
+    # GO TO GOAL
+    # ============================================================
 
-        # Força atrativa
-        f_att_x, f_att_y = compute_attractive(
-            self.robot_x, self.robot_y,
-            self.goal_x, self.goal_y,
+    def go_to_goal_controller(self):
+
+        # ========================================================
+        # ATTRACTIVE
+        # ========================================================
+
+        f_att_x, f_att_y, _, _ = compute_attractive(
+            self.robot_x,
+            self.robot_y,
+            self.robot_yaw,
+            self.goal_x,
+            self.goal_y,
             k_att=self.k_att,
-            d_threshold=self.d_threshold)
+        )
 
-        # Força repulsiva
+        # ========================================================
+        # REPULSIVE
+        # ========================================================
+
         f_rep_x, f_rep_y = compute_repulsive(
-            self.last_scan, self.robot_yaw,
-            k_rep=self.k_rep, d0=self.d0)
+            self.scan,
+            k_rep=self.k_rep,
+            d0=self.d0,
+        )
+
+        # ========================================================
+        # TOTAL FORCE
+        # ========================================================
 
         fx = f_att_x + f_rep_x
         fy = f_att_y + f_rep_y
 
-        # Checa progresso
-        moved = distance(
-            (self.robot_x, self.robot_y),
-            (self.last_progress_x, self.last_progress_y))
+        # ========================================================
+        # TANGENTIAL FIELD
+        # ========================================================
 
-        if moved > 0.1:
-            self.last_progress_x = self.robot_x
-            self.last_progress_y = self.robot_y
-            self.last_progress_time = now
-            self.stuck_state = self.STATE_NORMAL
-        else:
-            elapsed = now - self.last_progress_time
-            if elapsed < 0.01:
-                elapsed = 0.01
+        if self.enable_tangential:
 
-            if elapsed > 10.0:
-                # Nível 3: wall-following
-                self.stuck_state = self.STATE_WALL_FOLLOW
-                self.wall_follow_start_time = now
-                self.get_logger().warn(
-                    'Mínimo local persistente. Iniciando wall-following temporário.')
-                return self._wall_follow_control()
+            tx = -f_rep_y
+            ty = f_rep_x
 
-            elif elapsed > 6.0:
-                # Nível 2: perturbação forte, alternando direção
-                if self.stuck_state != self.STATE_PERTURB_2:
-                    self.stuck_state = self.STATE_PERTURB_2
-                    self.perturb_direction *= -1.0  # alterna lado
-                    self.get_logger().warn(
-                        f'Perturbação forte (dir={self.perturb_direction:+.0f})')
+            tx *= self.tangential_gain
+            ty *= self.tangential_gain
 
-                dx = self.goal_x - self.robot_x
-                dy = self.goal_y - self.robot_y
-                d = math.hypot(dx, dy)
-                if d > 1e-6:
-                    fx += self.perturb_direction * (-dy / d) * 0.5
-                    fy += self.perturb_direction * (dx / d) * 0.5
+            fx += tx
+            fy += ty
 
-            elif elapsed > 3.0:
-                # Nível 1: perturbação leve
-                if self.stuck_state != self.STATE_PERTURB_1:
-                    self.stuck_state = self.STATE_PERTURB_1
-                    self.get_logger().warn('Perturbação leve ativada.')
+        # ========================================================
+        # FILTER
+        # ========================================================
 
-                dx = self.goal_x - self.robot_x
-                dy = self.goal_y - self.robot_y
-                d = math.hypot(dx, dy)
-                if d > 1e-6:
-                    fx += self.perturb_direction * (-dy / d) * 0.3
-                    fy += self.perturb_direction * (dx / d) * 0.3
+        fx = (
+            self.smoothing_alpha * self.filtered_fx
+            + (1.0 - self.smoothing_alpha) * fx
+        )
 
-        return force_to_twist(
-            fx, fy, self.robot_yaw,
-            v_max=self.v_max,
-            omega_max=self.omega_max,
-            k_omega=self.k_omega)
+        fy = (
+            self.smoothing_alpha * self.filtered_fy
+            + (1.0 - self.smoothing_alpha) * fy
+        )
 
-    def _wall_follow_control(self) -> Twist:
-        """Segue a parede do obstáculo mais próximo por tempo limitado.
+        self.filtered_fx = fx
+        self.filtered_fy = fy
 
-        Mantém uma distância fixa da parede usando as leituras laterais
-        do laser. Depois de wall_follow_duration segundos, volta ao
-        campo potencial normal.
-        """
-        now = self.get_clock().now().nanoseconds / 1e9
-        elapsed = now - self.wall_follow_start_time
+        # ========================================================
+        # SAFETY STOP
+        # ========================================================
 
-        # Tempo esgotado → volta ao normal
-        if elapsed > self.wall_follow_duration:
-            self.get_logger().info('Wall-following encerrado. Voltando ao campo potencial.')
-            self._reset_stuck()
-            self.perturb_direction *= -1.0  # alterna para próxima vez
-            return Twist()
+        if self.front_collision_risk():
 
-        scan = self.last_scan
+            twist = Twist()
+
+            twist.angular.z = (
+                0.8 * self.escape_direction
+            )
+
+            return twist
+
+        # ========================================================
+        # DEBUG
+        # ========================================================
+
+        self.publish_force_marker(fx, fy)
+
+        # ========================================================
+        # CONTROL
+        # ========================================================
+
+        return self.force_to_cmd_vel(fx, fy)
+
+    # ============================================================
+    # ESCAPE
+    # ============================================================
+
+    def escape_controller(self):
+
         twist = Twist()
 
-        # Encontra obstáculo mais próximo
-        obs = closest_obstacle(scan)
-        if obs is None:
-            # Sem obstáculo detectado → vai para a meta
-            self._reset_stuck()
-            return Twist()
+        twist.linear.x = 0.0
 
-        obs_range, obs_angle, _ = obs
+        twist.angular.z = (
+            self.escape_gain
+            * self.escape_direction
+        )
 
-        # Estratégia: andar para frente e ajustar ângulo para manter
-        # distância wall_follow_dist do obstáculo mais próximo.
-        # A direção de contorno depende de perturb_direction.
+        elapsed = (
+            self.get_clock().now().nanoseconds / 1e9
+            - self.escape_start_time
+        )
 
-        # Ângulo desejado: perpendicular ao obstáculo
-        if self.perturb_direction > 0:
-            # Contorna pela esquerda: obstáculo deve ficar à direita
-            desired_angle = obs_angle + math.pi / 2
-        else:
-            # Contorna pela direita: obstáculo deve ficar à esquerda
-            desired_angle = obs_angle - math.pi / 2
+        if elapsed > 2.0:
 
-        # Correção de distância: se muito perto, afasta; se muito longe, aproxima
-        dist_error = obs_range - self.wall_follow_dist
-        angle_correction = -0.5 * dist_error * self.perturb_direction
-
-        desired_angle += angle_correction
-
-        # Converte para velocidades
-        # desired_angle está no frame do laser (= frame do robô para nós)
-        twist.linear.x = self.v_max * 0.6  # mais devagar no wall-follow
-        twist.angular.z = 1.5 * wrap_to_pi(desired_angle)
-        twist.angular.z = max(-self.omega_max, min(self.omega_max, twist.angular.z))
-
-        # Se muito perto de qualquer obstáculo, para e só gira
-        if obs_range < 0.3:
-            twist.linear.x = 0.0
-            twist.angular.z = self.omega_max * self.perturb_direction
+            self.state = NavState.WALL_FOLLOW
 
         return twist
 
-    def _reset_stuck(self):
-        """Reseta o estado anti-mínimo-local."""
-        now = self.get_clock().now().nanoseconds / 1e9
-        self.stuck_state = self.STATE_NORMAL
-        self.last_progress_x = self.robot_x
-        self.last_progress_y = self.robot_y
-        self.last_progress_time = now
+    # ============================================================
+    # WALL FOLLOW
+    # ============================================================
 
-    def publish_goal_marker(self):
+    def wall_follow_controller(self):
+
+        twist = Twist()
+
+        twist.linear.x = 0.15
+
+        twist.angular.z = (
+            0.5 * self.escape_direction
+        )
+
+        elapsed = (
+            self.get_clock().now().nanoseconds / 1e9
+            - self.escape_start_time
+        )
+
+        if elapsed > self.wall_follow_time:
+
+            self.state = NavState.GO_TO_GOAL
+
+            self.progress_history.clear()
+
+        return twist
+
+    # ============================================================
+    # FORCE → CMD_VEL
+    # ============================================================
+
+    def force_to_cmd_vel(self, fx, fy):
+
+        twist = Twist()
+
+        desired_heading = math.atan2(fy, fx)
+
+        heading_error = wrap_to_pi(
+            desired_heading - self.robot_yaw
+        )
+
+        force_norm = math.hypot(fx, fy)
+
+        # ========================================================
+        # ANGULAR
+        # ========================================================
+
+        twist.angular.z = (
+            2.2 * heading_error
+        )
+
+        twist.angular.z = max(
+            -self.max_angular,
+            min(
+                self.max_angular,
+                twist.angular.z,
+            )
+        )
+
+        # ========================================================
+        # LINEAR
+        # ========================================================
+
+        alignment = max(
+            math.cos(heading_error),
+            0.0,
+        )
+
+        twist.linear.x = (
+            0.4
+            * force_norm
+            * alignment
+        )
+
+        twist.linear.x = min(
+            twist.linear.x,
+            self.max_linear,
+        )
+
+        return twist
+
+    # ============================================================
+    # FRONT COLLISION
+    # ============================================================
+
+    def front_collision_risk(self):
+
+        if self.scan is None:
+            return False
+
+        ranges = self.scan.ranges
+
+        center = len(ranges) // 2
+
+        width = 20
+
+        for i in range(center - width, center + width):
+
+            if i < 0 or i >= len(ranges):
+                continue
+
+            d = ranges[i]
+
+            if not math.isfinite(d):
+                continue
+
+            if d < self.front_safety_distance:
+                return True
+
+        return False
+
+    # ============================================================
+    # PROGRESS
+    # ============================================================
+
+    def update_progress(self, goal_dist):
+
+        now = (
+            self.get_clock().now().nanoseconds / 1e9
+        )
+
+        self.progress_history.append(
+            (now, goal_dist)
+        )
+
+        if len(self.progress_history) < 10:
+            return
+
+        old_time, old_dist = self.progress_history[0]
+
+        progress = old_dist - goal_dist
+
+        elapsed = now - old_time
+
+        if elapsed < self.stuck_timeout:
+            return
+
+        # sem progresso suficiente
+        if progress < 0.15:
+
+            self.get_logger().warn(
+                "Robot appears stuck."
+            )
+
+            self.state = NavState.ESCAPE
+
+            self.escape_start_time = now
+
+            self.escape_direction *= -1.0
+
+            self.progress_history.clear()
+
+    # ============================================================
+    # DEBUG MARKER
+    # ============================================================
+
+    def publish_force_marker(self, fx, fy):
+
         marker = Marker()
-        marker.header.frame_id = 'odom'
-        marker.header.stamp = self.get_clock().now().to_msg()
-        marker.ns = 'goal'
+
+        marker.header.frame_id = "base_link"
+
+        marker.header.stamp = (
+            self.get_clock().now().to_msg()
+        )
+
+        marker.ns = "forces"
+
         marker.id = 0
-        marker.type = Marker.SPHERE
+
+        marker.type = Marker.ARROW
+
         marker.action = Marker.ADD
-        marker.pose.position.x = self.goal_x
-        marker.pose.position.y = self.goal_y
-        marker.pose.position.z = 0.2
-        marker.pose.orientation.w = 1.0
-        marker.scale.x = 0.3
-        marker.scale.y = 0.3
-        marker.scale.z = 0.3
-        marker.color = ColorRGBA(r=0.0, g=1.0, b=0.0, a=1.0)
-        self.pub_marker.publish(marker)
 
-    def main(args=None):
-        rclpy.init(args=args)
-        node = PotentialFieldNode()
-        try:
-            rclpy.spin(node)
-        except KeyboardInterrupt:
-            pass
-        finally:
-            node.destroy_node()
-            rclpy.shutdown()
+        marker.scale.x = 0.05
+        marker.scale.y = 0.10
+        marker.scale.z = 0.10
 
+        marker.color.a = 1.0
+        marker.color.r = 1.0
+
+        marker.points = []
+
+        p0 = Vector3()
+        p1 = Vector3()
+
+        p1.x = fx
+        p1.y = fy
+
+        marker_pub = marker
+
+        self.marker_pub.publish(marker_pub)
+
+    # ============================================================
+    # STOP
+    # ============================================================
+
+    def stop_robot(self):
+
+        self.cmd_pub.publish(Twist())
+
+
+# ================================================================
+# MAIN
+# ================================================================
 
 def main(args=None):
+
     rclpy.init(args=args)
+
     node = PotentialFieldNode()
 
     try:
+
         rclpy.spin(node)
 
     except KeyboardInterrupt:
+
         pass
 
     finally:
-        # para o robô antes do shutdown
-        if rclpy.ok():
-            node.pub_cmd.publish(Twist())
+
+        node.stop_robot()
 
         node.destroy_node()
+
         rclpy.shutdown()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
+
     main()

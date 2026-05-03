@@ -14,109 +14,206 @@ no frame do mundo (transformada pelo yaw do robô).
 
 import math
 from typing import Tuple
+
 from sensor_msgs.msg import LaserScan
 
 
-def compute_repulsive(scan: LaserScan,
-                      robot_yaw: float,
-                      k_rep: float = 0.5,
-                      d0: float = 1.5
-                      ) -> Tuple[float, float]:
-    """Calcula a força repulsiva total a partir do LaserScan.
+def compute_repulsive(
+    scan: LaserScan,
+    k_rep: float = 1.2,
+    d0: float = 1.5,
+    robot_radius: float = 0.22,
+    max_force: float = 8.0,
+    front_angle_deg: float = 140.0,
+    smoothing_window: int = 2,
+) -> Tuple[float, float]:
+    """
+    Calcula força repulsiva no FRAME DO ROBÔ.
 
     Args:
-        scan: mensagem LaserScan
-        robot_yaw: heading do robô no frame do mundo (rad).
-                   Necessário para transformar as forças do frame do laser
-                   para o frame do mundo.
-        k_rep: ganho repulsivo
-        d0: distância de influência — feixes acima de d0 são ignorados
+        scan:
+            Mensagem LaserScan
+
+        k_rep:
+            Ganho repulsivo
+
+        d0:
+            Distância de influência
+
+        robot_radius:
+            Distância mínima de segurança
+
+        max_force:
+            Saturação da força total
+
+        front_angle_deg:
+            Campo angular considerado
+
+        smoothing_window:
+            Quantidade de vizinhos usados para suavização
 
     Returns:
-        (Fx, Fy) no frame do mundo, apontando PARA LONGE dos obstáculos
+        (Fx, Fy) no frame do robô
     """
+
     fx_total = 0.0
     fy_total = 0.0
 
-    for i, d in enumerate(scan.ranges):
-        # Ignora feixes inválidos ou fora do alcance
-        if not math.isfinite(d):
+    ranges = list(scan.ranges)
+    n = len(ranges)
+
+    front_limit = math.radians(front_angle_deg / 2.0)
+
+    for i in range(n):
+
+        # ============================================================
+        # 1. SUAVIZAÇÃO LOCAL
+        # ============================================================
+
+        values = []
+
+        for j in range(
+            max(0, i - smoothing_window),
+            min(n, i + smoothing_window + 1),
+        ):
+            d = ranges[j]
+
+            if (
+                math.isfinite(d)
+                and scan.range_min < d < scan.range_max
+            ):
+                values.append(d)
+
+        if not values:
             continue
-        if d < scan.range_min or d > scan.range_max:
+
+        d = sum(values) / len(values)
+
+        # ============================================================
+        # 2. ÂNGULO DO FEIXE
+        # ============================================================
+
+        angle = scan.angle_min + i * scan.angle_increment
+
+        # ignora traseira
+        if abs(angle) > front_limit:
             continue
-        # Ignora feixes fora da zona de influência
+
+        # ============================================================
+        # 3. ZONA DE INFLUÊNCIA
+        # ============================================================
+
         if d >= d0:
             continue
-        front_limit = math.radians(120)
 
-        # Ângulo do feixe no frame do laser
-        angle_laser = scan.angle_min + i * scan.angle_increment
+        # distância efetiva considerando tamanho do robô
+        d_eff = max(d - robot_radius, 0.05)
 
-        if abs(angle_laser) > front_limit:
-            continue
+        # ============================================================
+        # 4. MAGNITUDE REPULSIVA
+        # ============================================================
 
-        d_min = 0.20
-        f_rep_max = 5
+        # Fórmula clássica:
+        #
+        # F = k * (1/d - 1/d0) / d²
+        #
+        magnitude = (
+            k_rep
+            * (1.0 / d_eff - 1.0 / d0)
+            / (d_eff * d_eff)
+        )
 
-        d = max(d, d_min)
-        magnitude = k_rep * (1.0 / d - 1.0 / d0) / (d * d)
-        
-        magnitude = min(magnitude, f_rep_max)
+        # ============================================================
+        # 5. PESO ANGULAR
+        # ============================================================
 
-        # Direção: do obstáculo para o robô = oposta ao feixe
-        # No frame do laser, o feixe aponta para (cos(angle), sin(angle))
-        # A repulsão aponta para (-cos(angle), -sin(angle))
-        fx_laser = -magnitude * math.cos(angle_laser)
-        fy_laser = -magnitude * math.sin(angle_laser)
+        # Obstáculos à frente têm peso maior.
+        #
+        # cos(angle):
+        #   1.0  -> frente
+        #   0.0  -> lateral
+        #
+        angular_weight = max(math.cos(angle), 0.0)
 
-        fx_total += fx_laser
-        fy_total += fy_laser
+        magnitude *= angular_weight
 
-    # Transforma do frame do laser para o frame do mundo
-    # Rotação 2D pelo yaw do robô
-    cos_yaw = math.cos(robot_yaw)
-    sin_yaw = math.sin(robot_yaw)
-    fx_world = cos_yaw * fx_total - sin_yaw * fy_total
-    fy_world = sin_yaw * fx_total + cos_yaw * fy_total
+        # ============================================================
+        # 6. SATURAÇÃO SUAVE
+        # ============================================================
 
-    return (fx_world, fy_world)
+        magnitude = min(magnitude, max_force)
+
+        # ============================================================
+        # 7. VETOR REPULSIVO
+        # ============================================================
+
+        # Feixe aponta para obstáculo.
+        # Repulsão aponta no sentido oposto.
+        fx = -magnitude * math.cos(angle)
+        fy = -magnitude * math.sin(angle)
+
+        fx_total += fx
+        fy_total += fy
+
+    # ================================================================
+    # 8. NORMALIZAÇÃO OPCIONAL
+    # ================================================================
+
+    norm = math.hypot(fx_total, fy_total)
+
+    if norm > max_force:
+        scale = max_force / norm
+        fx_total *= scale
+        fy_total *= scale
+
+    return fx_total, fy_total
 
 
-def compute_repulsive_from_points(obstacles: list,
-                                  robot_x: float, robot_y: float,
-                                  k_rep: float = 0.5,
-                                  d0: float = 2.0
-                                  ) -> Tuple[float, float]:
-    """Calcula repulsão a partir de posições conhecidas (para multi-robô).
+# ===================================================================
+# EXEMPLO DE USO EM ROBÔ DIFERENCIAL
+# ===================================================================
 
-    No exercício 4, cada robô sabe a posição dos outros. Essa função
-    calcula o potencial repulsivo usando essas posições diretamente,
-    sem precisar do laser.
+def force_to_cmd_vel(
+    fx: float,
+    fy: float,
+    max_linear: float = 0.4,
+    max_angular: float = 1.5,
+) -> Tuple[float, float]:
+    """
+    Converte força potencial em cmd_vel.
 
-    Args:
-        obstacles: lista de (x, y) no frame do mundo
-        robot_x, robot_y: posição do robô
-        k_rep: ganho repulsivo
-        d0: distância de influência
+    Ideal para robô diferencial.
 
     Returns:
-        (Fx, Fy) no frame do mundo
+        (linear_x, angular_z)
     """
-    fx_total = 0.0
-    fy_total = 0.0
 
-    for ox, oy in obstacles:
-        dx = robot_x - ox
-        dy = robot_y - oy
-        d = math.hypot(dx, dy)
+    # direção desejada
+    desired_heading = math.atan2(fy, fx)
 
-        if d < 0.01:
-            d = 0.01  # evita divisão por zero
-        if d >= d0:
-            continue
+    # intensidade da força
+    magnitude = math.hypot(fx, fy)
 
-        magnitude = k_rep * (1.0 / d - 1.0 / d0) / (d * d)
-        fx_total += magnitude * dx / d
-        fy_total += magnitude * dy / d
+    # ============================================================
+    # Controle angular
+    # ============================================================
 
-    return (fx_total, fy_total)
+    angular_z = 2.0 * desired_heading
+
+    angular_z = max(
+        -max_angular,
+        min(max_angular, angular_z),
+    )
+
+    # ============================================================
+    # Controle linear
+    # ============================================================
+
+    # anda mais quando alinhado
+    heading_factor = max(math.cos(desired_heading), 0.0)
+
+    linear_x = 0.25 * magnitude * heading_factor
+
+    linear_x = min(linear_x, max_linear)
+
+    return linear_x, angular_z
