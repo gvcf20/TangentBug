@@ -10,7 +10,7 @@ import math
 import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import Odometry
-from geometry_msgs.msg import Twist, Point
+from geometry_msgs.msg import Twist, TwistStamped, Point
 from visualization_msgs.msg import Marker
 from std_msgs.msg import ColorRGBA
 
@@ -68,7 +68,11 @@ class CurveFollowerNode(Node):
         # Subscribers e publishers
         self.sub_odom = self.create_subscription(
             Odometry, '/odom', self.odom_callback, 10)
-        self.pub_cmd = self.create_publisher(Twist, '/cmd_vel', 10)
+        self.pub_cmd = self.create_publisher(
+        TwistStamped,
+        '/cmd_vel',
+        10
+        )
         self.pub_marker = self.create_publisher(Marker, '/curve_marker', 10)
 
         # Timer de controle
@@ -123,7 +127,11 @@ class CurveFollowerNode(Node):
         )
 
         # 3. Publica
-        self.pub_cmd.publish(twist)
+        msg = TwistStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.twist = twist
+
+        self.pub_cmd.publish(msg)
 
         # 4. Log (opcional)
         if self.logger_traj:
@@ -162,7 +170,11 @@ class CurveFollowerNode(Node):
     def destroy_node(self):
         """Limpeza ao fechar."""
         # Para o robô
-        self.pub_cmd.publish(Twist())
+        stop_msg = TwistStamped()
+        stop_msg.header.stamp = self.get_clock().now().to_msg()
+        stop_msg.twist = Twist()
+
+        self.pub_cmd.publish(stop_msg)
         if self.logger_traj:
             self.logger_traj.close()
         super().destroy_node()

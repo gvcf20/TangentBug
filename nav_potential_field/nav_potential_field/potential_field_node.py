@@ -14,7 +14,7 @@ import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
-from geometry_msgs.msg import Twist, PoseStamped
+from geometry_msgs.msg import Twist, TwistStamped, PoseStamped
 from visualization_msgs.msg import Marker
 from std_msgs.msg import ColorRGBA
 
@@ -101,7 +101,11 @@ class PotentialFieldNode(Node):
             PoseStamped, '/goal_pose', self.goal_callback, 10)
 
         # Publishers
-        self.pub_cmd = self.create_publisher(Twist, '/cmd_vel', 10)
+        self.pub_cmd = self.create_publisher(
+        TwistStamped,
+        '/cmd_vel',
+        10
+        )
         self.pub_marker = self.create_publisher(Marker, '/potential_markers', 10)
 
         # Timer de controle
@@ -173,7 +177,11 @@ class PotentialFieldNode(Node):
         else:
             twist = self._potential_field_control(dist_to_goal)
 
-        self.pub_cmd.publish(twist)
+        msg = TwistStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.twist = twist
+
+        self.pub_cmd.publish(msg)
 
         # Log
         if self.logger_traj:
@@ -345,7 +353,11 @@ class PotentialFieldNode(Node):
         self.pub_marker.publish(marker)
 
     def destroy_node(self):
-        self.pub_cmd.publish(Twist())
+        stop_msg = TwistStamped()
+        stop_msg.header.stamp = self.get_clock().now().to_msg()
+        stop_msg.twist = Twist()
+
+        self.pub_cmd.publish(stop_msg)
         if self.logger_traj:
             self.logger_traj.close()
         super().destroy_node()
