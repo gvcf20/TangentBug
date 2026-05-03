@@ -41,7 +41,7 @@ class PotentialFieldNode(Node):
         # Parâmetros
         self.declare_parameter('k_att', 1.0)
         self.declare_parameter('k_rep', 0.5)
-        self.declare_parameter('d0', 1.5)
+        self.declare_parameter('d0', 0.3)
         self.declare_parameter('d_threshold', 2.0)
         self.declare_parameter('goal_tolerance', 0.2)
         self.declare_parameter('v_max', 0.4)

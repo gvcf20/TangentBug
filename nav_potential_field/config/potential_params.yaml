@@ -3,7 +3,7 @@ potential_field:
     # Ganhos
     k_att: 1.0
     k_rep: 0.8              # aumentado (era 0.5) — repele mais forte
-    d0: 2.0                 # aumentado (era 1.5) — detecta obstáculo mais cedo
+    d0: 0.3                # aumentado (era 1.5) — detecta obstáculo mais cedo
     d_threshold: 2.0
 
     # Navegação

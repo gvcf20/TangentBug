@@ -20,7 +20,7 @@ from sensor_msgs.msg import LaserScan
 def compute_repulsive(scan: LaserScan,
                       robot_yaw: float,
                       k_rep: float = 0.5,
-                      d0: float = 1.5
+                      d0: float = 0.3
                       ) -> Tuple[float, float]:
     """Calcula a força repulsiva total a partir do LaserScan.
 
