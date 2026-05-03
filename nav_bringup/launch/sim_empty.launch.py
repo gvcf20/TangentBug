@@ -1,11 +1,11 @@
 import os
 
 from ament_index_python.packages import get_package_share_directory
-
+from launch.substitutions import LaunchConfiguration
+from launch.actions import DeclareLaunchArgument
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-
 from launch_ros.actions import Node
 
 
@@ -21,8 +21,18 @@ def generate_launch_description():
         'rviz',
         'nav.rviz'
     )
+    world = LaunchConfiguration('world')
 
-    # Launch oficial do TurtleBot3
+    declare_world = DeclareLaunchArgument(
+        'world',
+        default_value=os.path.join(
+            pkg_nav_bringup,
+            'worlds',
+            'empty.world'
+        ),
+        description='World file'
+)
+
     tb3_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(
@@ -30,7 +40,10 @@ def generate_launch_description():
                 'launch',
                 'empty_world.launch.py'
             )
-        )
+        ),
+        launch_arguments={
+            'world': world
+        }.items()
     )
 
     # RViz
@@ -43,6 +56,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        declare_world,
         tb3_launch,
         rviz,
     ])

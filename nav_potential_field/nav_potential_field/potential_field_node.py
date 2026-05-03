@@ -135,15 +135,30 @@ class PotentialFieldNode(Node):
         self.last_scan = msg
 
     def goal_callback(self, msg: PoseStamped):
+
         self.goal_x = msg.pose.position.x
         self.goal_y = msg.pose.position.y
+
         self.goal_active = True
         self.goal_reached = False
-        self._reset_stuck()
+
+        # zera estados internos
+        self.stuck_state = self.STATE_NORMAL
         self.best_dist_to_goal = float('inf')
+
+        # para movimento anterior
+        stop_msg = TwistStamped()
+        stop_msg.header.stamp = self.get_clock().now().to_msg()
+        stop_msg.twist = Twist()
+
+        self.pub_cmd.publish(stop_msg)
+        self.pub_cmd.publish(TwistStamped())
+        
+        self._reset_stuck()
 
         self.get_logger().info(
             f'Nova meta: ({self.goal_x:.2f}, {self.goal_y:.2f})')
+
         self.publish_goal_marker()
 
     def control_loop(self):
@@ -163,7 +178,12 @@ class PotentialFieldNode(Node):
 
         # Chegou?
         if dist_to_goal < self.goal_tolerance:
-            self.pub_cmd.publish(Twist())
+
+            stop_msg = TwistStamped()
+            stop_msg.header.stamp = self.get_clock().now().to_msg()
+            stop_msg.twist = Twist()
+
+            self.pub_cmd.publish(stop_msg)
             self.goal_reached = True
             self.goal_active = False
             self.stuck_state = self.STATE_NORMAL
@@ -336,7 +356,7 @@ class PotentialFieldNode(Node):
 
     def publish_goal_marker(self):
         marker = Marker()
-        marker.header.frame_id = 'odom'
+        marker.header.frame_id = 'map'
         marker.header.stamp = self.get_clock().now().to_msg()
         marker.ns = 'goal'
         marker.id = 0
