@@ -1,0 +1,14 @@
+# === GOAL (enviado pelo cliente) ===
+geometry_msgs/Point target
+---
+# === RESULT (devolvido quando termina) ===
+bool success
+string message
+# message: "goal_reached" | "no_path_found" | "cancelled"
+---
+# === FEEDBACK (publicado durante a execução) ===
+float32 distance_to_goal
+string current_state
+# current_state: "motion_to_goal" | "boundary_following"
+float32 d_reach
+float32 d_followed
