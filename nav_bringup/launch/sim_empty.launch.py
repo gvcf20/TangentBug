@@ -13,7 +13,7 @@ def generate_launch_description():
     pkg_ros_gz_sim = get_package_share_directory('ros_gz_sim')
 
     # Caminhos
-    urdf_file = os.path.join(pkg_nav_bringup, 'urdf', 'diff_robot.urdf.xacro')
+    urdf_file = os.path.join(pkg_nav_bringup, 'urdf', 'turtlebot3_burger.urdf')
     bridge_config = os.path.join(pkg_nav_bringup, 'config', 'bridge_params.yaml')
     rviz_config = os.path.join(pkg_nav_bringup, 'config', 'rviz', 'nav.rviz')
 
@@ -32,9 +32,10 @@ def generate_launch_description():
         description='Caminho absoluto do arquivo .world a carregar'
     )
 
-    # Robot description (xacro → URDF string)
+    with open(urdf_file, 'r') as f:
+        robot_description_raw = f.read()
     robot_description_content = ParameterValue(
-        Command(['xacro ', urdf_file]),
+        robot_description_raw,
         value_type=str
     )
     robot_description = {
