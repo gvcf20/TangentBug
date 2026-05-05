@@ -1,0 +1,1 @@
+"""nav_tangent_bug: algoritmo Tangent Bug para navegação reativa."""

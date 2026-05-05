@@ -1,0 +1,18 @@
+tangent_bug:
+  ros__parameters:
+    v_max: 0.22
+    omega_max: 2.84
+    k_omega: 2.5
+    goal_tolerance: 0.20
+    safe_distance: 0.30              # distância para considerar "bloqueado"
+    wall_follow_distance: 0.35       # distância da parede no boundary-following
+    discontinuity_threshold: 0.5     # limiar para detectar quinas no laser
+    control_rate: 20.0
+
+    # Detecção de volta completa (no_path)
+    loop_closure_dist: 0.3           # distância para fechar o loop (m)
+    loop_closure_min_travel: 1.5     # mínimo percorrido antes de checar loop (m)
+
+    # Logging
+    log_trajectory: true
+    log_file: '/tmp/tangent_bug_trajectory.csv'
