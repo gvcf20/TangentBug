@@ -457,3 +457,4 @@ Inofensivos no WSL — relacionados a memória compartilhada do Fast DDS. Podem 
 ## Autor
 
 Gabriel Vaz Cançado Ferreira - gabrielvazcancadoferreira@gmail.com
+Philip Ribeiro Costa
