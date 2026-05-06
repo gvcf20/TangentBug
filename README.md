@@ -658,5 +658,6 @@ colcon test --packages-select nav_common && colcon test-result --verbose
 
 ## Autor
 
-Gabriel V. C. F. — Engenharia Elétrica, UFMG
-Trabalho de Robótica Móvel
+Gabriel Vaz Cançado Ferreira — Engenharia Elétrica, UFMG
+Phillip Ribeiro Costa — Engenharia Elétrica, UFMG
+Trabalho de Planejamento de Movimento de Robôs
