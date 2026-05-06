@@ -1,0 +1,1 @@
+"""nav_multi_robot: composição de curva paramétrica + campo potencial multi-robô."""

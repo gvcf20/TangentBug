@@ -1,0 +1,30 @@
+# Parâmetros compartilhados por todos os robôs
+multi_robot_common:
+  ros__parameters:
+    n_robots: 2
+    curve_type: 'lemniscate'
+    curve_scale: 2.0
+
+    # Pesos da composição
+    alpha: 1.0          # curva
+    beta: 1.0           # repulsão obstáculos
+    gamma: 1.5          # repulsão entre robôs
+
+    # Curva
+    k_normal: 1.5
+    k_tangent: 1.0
+    convergence_radius: 3.0
+
+    # Repulsão obstáculos
+    k_rep_obs: 1.0
+    d0_obs: 1.2
+
+    # Repulsão entre robôs
+    k_rep_robot: 2.0
+    d0_robot: 1.5
+
+    # Controle
+    v_max: 0.22
+    omega_max: 2.84
+    k_omega: 2.0
+    control_rate: 20.0
