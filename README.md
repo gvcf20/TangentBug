@@ -1,45 +1,55 @@
-# Trabalho de Robótica Móvel — ROS 2 Jazzy
+# Trabalho de Robótica Móvel — Navegação Reativa com ROS 2
 
-Repositório do trabalho de robótica móvel da disciplina, implementado em **ROS 2 Jazzy** sobre **Ubuntu 24.04** (rodando em WSL2). O projeto consiste em quatro exercícios envolvendo navegação de um robô diferencial simulado em Gazebo Harmonic, equipado com sensor laser.
+Repositório do trabalho de robótica móvel implementado em **ROS 2 Jazzy** com **Gazebo Harmonic**, usando o **TurtleBot3 Burger** como plataforma de simulação. O projeto implementa quatro estratégias de navegação para robôs com acionamento diferencial equipados com sensor laser.
 
 ---
 
 ## Sumário
 
-- [Visão geral do trabalho](#visão-geral-do-trabalho)
-- [Estrutura do repositório](#estrutura-do-repositório)
+- [Exercícios](#exercícios)
+- [Estrutura do Repositório](#estrutura-do-repositório)
+- [Arquitetura ROS 2](#arquitetura-ros-2)
 - [Requisitos](#requisitos)
 - [Instalação](#instalação)
-- [Build do workspace](#build-do-workspace)
-- [Como rodar](#como-rodar)
-- [Validação e diagnóstico](#validação-e-diagnóstico)
-- [Pacotes implementados](#pacotes-implementados)
-- [Roadmap](#roadmap)
+- [Build](#build)
+- [Executando os Exercícios](#executando-os-exercícios)
+- [Descrição dos Pacotes](#descrição-dos-pacotes)
+- [Parâmetros Configuráveis](#parâmetros-configuráveis)
 - [Troubleshooting](#troubleshooting)
+- [Autor](#autor)
 
 ---
 
-## Visão geral do trabalho
+## Exercícios
 
-O trabalho consiste em quatro exercícios que serão implementados em pacotes ROS 2 separados, todos usando o mesmo robô diferencial simulado:
+### Exercício 1 — Tangent Bug (`nav_tangent_bug`)
 
-1. **Tangent Bug** — navegação reativa entre dois pontos com detecção de "sem caminho" em tempo finito.
-2. **Curva paramétrica** — controlador que faz o robô convergir e circular eternamente uma curva plana (ex: lemniscata).
-3. **Campo potencial** — atrativo + repulsivo usando o laser para navegação entre dois pontos.
-4. **Multi-robô** — composição dos exercícios 2 e 3 com vários robôs circulando a mesma curva, evitando obstáculos e colisões mútuas.
+Algoritmo de navegação reativa tipo Tangent Bug que navega um robô diferencial entre duas posições quaisquer, escolhidas pelo usuário em tempo de execução, sem colidir com obstáculos. Se não houver caminho entre as posições, o robô informa ao usuário em tempo finito.
 
-A ordem de implementação **não segue** a numeração do enunciado — a sequência adotada é 2 → 3 → 1 → 4, porque cada exercício reaproveita código do anterior.
+O algoritmo opera com duas modalidades: **Motion-to-Goal** (vai em linha reta à meta) e **Boundary-Following** (contorna obstáculos quando o caminho direto está bloqueado). A transição entre estados é governada pelas heurísticas d_reach e d_followed.
+
+### Exercício 2 — Curva Paramétrica (`nav_parametric_curve`)
+
+Controlador baseado em campo vetorial que faz o robô convergir e circular eternamente uma lemniscata de Bernoulli. O campo combina um componente normal (convergência) com um componente tangente (circulação), ponderados por tanh para transição suave.
+
+### Exercício 3 — Campo Potencial (`nav_potential_field`)
+
+Navegação por potencial atrativo (meta) + repulsivo (obstáculos via laser) entre duas posições quaisquer num ambiente com obstáculos. Inclui detecção de mínimo local com wall-following orientado à meta como estratégia de escape.
+
+### Exercício 4 — Multi-Robô (`nav_multi_robot`)
+
+Composição dos exercícios 2 e 3: dois ou mais robôs navegam para convergir e circular a mesma curva paramétrica num ambiente com obstáculos estáticos. Os robôs usam funções de potencial para evitar obstáculos e colisões entre si, com cada robô tendo acesso à posição dos demais.
 
 ---
 
-## Estrutura do repositório
+## Estrutura do Repositório
 
 ```
-ros2_ws/src/                   ← raiz do repositório Git
-├── README.md                  ← este arquivo
+ros2_ws/src/                          ← raiz do repositório Git
+├── README.md
 ├── .gitignore
 │
-├── docs/                      ← relatório e documentação dos exercícios
+├── docs/                             ← relatório e documentação
 │   ├── relatorio.md
 │   ├── ex1_tangent_bug.md
 │   ├── ex2_curva_parametrica.md
@@ -47,30 +57,117 @@ ros2_ws/src/                   ← raiz do repositório Git
 │   ├── ex4_multi_robo.md
 │   └── figuras/
 │
-├── nav_bringup/               ← [IMPLEMENTADO] simulação, robô, mundos, launches
-│   ├── package.xml
-│   ├── CMakeLists.txt
+├── nav_bringup/                      ← simulação, robô, mundos, launches
 │   ├── urdf/
-│   │   └── diff_robot.urdf.xacro
+│   │   ├── turtlebot3_burger.urdf    ← TurtleBot3 + plugins Gazebo
+│   │   └── diff_robot.urdf.xacro     ← robô customizado (alternativo)
 │   ├── worlds/
 │   │   ├── empty.world
 │   │   ├── obstacles_simple.world
-│   │   └── obstacles_multi.world      (a criar)
+│   │   └── obstacles_multi.world
 │   ├── config/
 │   │   ├── bridge_params.yaml
-│   │   └── rviz/
-│   │       └── nav.rviz
+│   │   └── rviz/nav.rviz
 │   └── launch/
 │       ├── sim_empty.launch.py
 │       ├── sim_obstacles.launch.py
-│       └── sim_multi_robot.launch.py  (a criar)
+│       └── sim_multi_robot.launch.py
 │
-├── nav_common/                ← [PENDENTE] utilitários compartilhados
-├── nav_msgs_custom/           ← [PENDENTE] interfaces de action
-├── nav_tangent_bug/           ← [PENDENTE] Exercício 1
-├── nav_parametric_curve/      ← [PENDENTE] Exercício 2
-├── nav_potential_field/       ← [PENDENTE] Exercício 3
-└── nav_multi_robot/           ← [PENDENTE] Exercício 4
+├── nav_common/                       ← utilitários compartilhados
+│   ├── nav_common/
+│   │   ├── geometry.py               ← wrap_to_pi, yaw_from_quaternion, distance
+│   │   ├── diff_drive.py             ← force_to_twist, saturate_twist
+│   │   ├── laser_utils.py            ← scan_to_points, find_discontinuities
+│   │   ├── tf_helpers.py             ← TFHelper (wrapper tf2)
+│   │   └── plotting.py              ← TrajectoryLogger (CSV)
+│   └── test/
+│       ├── test_geometry.py          ← 17 testes
+│       └── test_laser_utils.py       ← 10 testes
+│
+├── nav_msgs_custom/                  ← interfaces de action
+│   └── action/
+│       └── NavigateToGoal.action
+│
+├── nav_tangent_bug/                  ← Exercício 1
+│   ├── nav_tangent_bug/
+│   │   ├── states.py                 ← TBState enum
+│   │   ├── heuristic.py              ← d_reach, find_best_tangent_point
+│   │   ├── tangent_bug_node.py       ← servidor de action
+│   │   └── client_node.py            ← cliente para enviar metas
+│   ├── config/tangent_bug.yaml
+│   └── launch/tangent_bug.launch.py
+│
+├── nav_parametric_curve/             ← Exercício 2
+│   ├── nav_parametric_curve/
+│   │   ├── curves.py                 ← Lemniscate, Cardioid
+│   │   ├── vector_field.py           ← compute_field (normal + tangente)
+│   │   └── curve_follower_node.py    ← nó ROS
+│   ├── config/curve_params.yaml
+│   └── launch/curve_follower.launch.py
+│
+├── nav_potential_field/              ← Exercício 3
+│   ├── nav_potential_field/
+│   │   ├── attractive.py             ← compute_attractive (parabólico + cônico)
+│   │   ├── repulsive.py              ← compute_repulsive (laser + pontos)
+│   │   └── potential_field_node.py   ← nó ROS com wall-follow escape
+│   ├── config/potential_params.yaml
+│   └── launch/potential_field.launch.py
+│
+└── nav_multi_robot/                  ← Exercício 4
+    ├── nav_multi_robot/
+    │   ├── composition.py            ← F = α·F_curva + β·F_rep_obs + γ·F_rep_rob
+    │   └── multi_robot_node.py       ← nó por robô
+    ├── config/multi_robot_params.yaml
+    └── launch/multi_robot.launch.py
+```
+
+---
+
+## Arquitetura ROS 2
+
+### Fluxo de dados (todos os exercícios)
+
+```
+Gazebo Harmonic
+    │
+    ├── publica /scan (LaserScan, via gpu_lidar)
+    ├── publica /odom (Odometry, via OdometryPublisher)
+    ├── publica /tf (TFMessage, via OdometryPublisher)
+    ├── escuta  /cmd_vel (Twist, via DiffDrive)
+    │
+    └── ros_gz_bridge traduz entre formatos Gazebo ↔ ROS
+            │
+            ▼
+    Nó controlador (exercício específico)
+        ├── subscreve /odom → extrai (x, y, yaw)
+        ├── subscreve /scan → lê obstáculos
+        ├── calcula campo vetorial / heurística
+        ├── converte para (v, ω) via force_to_twist()
+        └── publica /cmd_vel
+```
+
+### Configuração de odometria (crítica)
+
+O URDF do TurtleBot3 usa **dois plugins separados** no Gazebo:
+
+- **DiffDrive**: recebe `/cmd_vel` e move as rodas. **Não publica odometria nem TF** — apenas controle motor.
+- **OdometryPublisher**: única fonte de `/odom` e `/tf`, usando a posição real do Gazebo. Zero drift.
+
+Essa separação é essencial para evitar divergência entre odometria e posição real, que causaria comportamento errático nos algoritmos de navegação.
+
+### Comunicação no exercício 4 (multi-robô)
+
+```
+           robot_0                         robot_1
+    ┌─────────────────┐            ┌─────────────────┐
+    │ /robot_0/odom   │◄──────────►│ /robot_1/odom   │
+    │ /robot_0/scan   │            │ /robot_1/scan   │
+    │ /robot_0/cmd_vel│            │ /robot_1/cmd_vel│
+    │                 │            │                 │
+    │ Lê odom do      │            │ Lê odom do      │
+    │ robot_1 para    │            │ robot_0 para    │
+    │ repulsão mútua  │            │ repulsão mútua  │
+    └─────────────────┘            └─────────────────┘
 ```
 
 ---
@@ -79,64 +176,43 @@ ros2_ws/src/                   ← raiz do repositório Git
 
 ### Sistema
 
-- **Ubuntu 24.04 LTS** (Noble Numbat)
-- **WSL2** (se rodando no Windows) — Windows 11 recomendado pelo suporte nativo a GUI via WSLg
-- **ROS 2 Jazzy Jalisco**
-- **Gazebo Harmonic** (vem com `ros-gz` no Jazzy)
+- Ubuntu 24.04 LTS (Noble Numbat)
+- WSL2 (se rodando no Windows) — Windows 11 recomendado pelo WSLg
+- ROS 2 Jazzy Jalisco
+- Gazebo Harmonic
 
-### Pacotes ROS 2 necessários
+### Pacotes ROS 2
 
-Todos instalados via `apt`:
+```
+ros-jazzy-desktop
+ros-dev-tools
+ros-jazzy-ros-gz
+ros-jazzy-ros-gz-bridge
+ros-jazzy-ros-gz-sim
+ros-jazzy-xacro
+ros-jazzy-robot-state-publisher
+ros-jazzy-joint-state-publisher
+ros-jazzy-rviz2
+ros-jazzy-turtlebot3-description
+```
 
-- `ros-jazzy-desktop` — instalação completa do ROS 2 (inclui RViz, demos)
-- `ros-dev-tools` — colcon, rosdep, vcs, ament tools
-- `ros-jazzy-ros-gz` — integração ROS ↔ Gazebo Harmonic
-- `ros-jazzy-ros-gz-bridge` — bridge de tópicos
-- `ros-jazzy-ros-gz-sim` — launchers do Gazebo
-- `ros-jazzy-xacro` — pré-processador de URDF
-- `ros-jazzy-robot-state-publisher` — publica TF do URDF
-- `ros-jazzy-joint-state-publisher`
-- `ros-jazzy-rviz2` — visualizador 3D
+### Pacotes Python
 
-### Ferramentas auxiliares
-
-- `liburdfdom-tools` — `check_urdf` para validar URDFs
-- `tree` — visualização de estrutura de pastas
+```
+transforms3d
+```
 
 ---
 
 ## Instalação
 
-### 1. WSL2 e Ubuntu 24.04
-
-No PowerShell do Windows (como administrador):
-
-```powershell
-wsl --install -d Ubuntu-24.04
-wsl --set-default-version 2
-```
-
-Abra o Ubuntu, crie usuário e atualize:
+### 1. ROS 2 Jazzy
 
 ```bash
 sudo apt update && sudo apt upgrade -y
-```
-
-### 2. Locale
-
-```bash
-sudo apt install locales -y
-sudo locale-gen en_US en_US.UTF-8
-sudo update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
-export LANG=en_US.UTF-8
-```
-
-### 3. Repositório do ROS 2
-
-```bash
 sudo apt install software-properties-common -y
 sudo add-apt-repository universe
-sudo apt update && sudo apt install curl -y
+sudo apt install curl -y
 
 export ROS_APT_SOURCE_VERSION=$(curl -s https://api.github.com/repos/ros-infrastructure/ros-apt-source/releases/latest | grep -F "tag_name" | awk -F\" '{print $4}')
 curl -L -o /tmp/ros2-apt-source.deb "https://github.com/ros-infrastructure/ros-apt-source/releases/download/${ROS_APT_SOURCE_VERSION}/ros2-apt-source_${ROS_APT_SOURCE_VERSION}.$(. /etc/os-release && echo $VERSION_CODENAME)_all.deb"
@@ -144,7 +220,7 @@ sudo dpkg -i /tmp/ros2-apt-source.deb
 sudo apt update && sudo apt upgrade -y
 ```
 
-### 4. ROS 2 Jazzy + ferramentas
+### 2. Pacotes
 
 ```bash
 sudo apt install -y \
@@ -157,11 +233,13 @@ sudo apt install -y \
     ros-jazzy-robot-state-publisher \
     ros-jazzy-joint-state-publisher \
     ros-jazzy-rviz2 \
-    liburdfdom-tools \
-    tree
+    ros-jazzy-turtlebot3-description \
+    liburdfdom-tools
+
+pip install transforms3d --break-system-packages
 ```
 
-### 5. Source automático no `.bashrc`
+### 3. Source automático
 
 ```bash
 echo "source /opt/ros/jazzy/setup.bash" >> ~/.bashrc
@@ -169,7 +247,7 @@ echo "source ~/ros2_ws/install/setup.bash" >> ~/.bashrc
 source ~/.bashrc
 ```
 
-### 6. Clonar este repositório
+### 4. Clonar o repositório
 
 ```bash
 mkdir -p ~/ros2_ws/src
@@ -179,72 +257,125 @@ git clone <URL_DO_REPO> .
 
 ---
 
-## Build do workspace
+## Build
 
 ### Build completo (primeira vez)
 
 ```bash
 cd ~/ros2_ws
-rosdep install --from-paths src --ignore-src -r -y
-colcon build --symlink-install
+
+# nav_msgs_custom precisa de build normal (interfaces geram código compilado)
+colcon build --packages-select nav_msgs_custom
+
+# Todo o resto com symlink-install (edições refletem sem recompilar)
+colcon build --packages-ignore nav_msgs_custom --symlink-install
+
 source install/setup.bash
 ```
-
-A flag `--symlink-install` cria links simbólicos para arquivos Python, launches, configs e URDFs em vez de copiar — então edições nesses arquivos refletem imediatamente sem precisar recompilar.
 
 ### Build de um pacote específico
 
 ```bash
-colcon build --packages-select nav_bringup --symlink-install
+colcon build --packages-select nav_tangent_bug --symlink-install
 source install/setup.bash
 ```
 
-### Limpar build
+### Limpar e rebuildar
 
 ```bash
 cd ~/ros2_ws
 rm -rf build install log
-colcon build --symlink-install
+colcon build --packages-select nav_msgs_custom
+colcon build --packages-ignore nav_msgs_custom --symlink-install
+source install/setup.bash
+```
+
+### Rodar testes unitários
+
+```bash
+colcon test --packages-select nav_common
+colcon test-result --verbose
 ```
 
 ---
 
-## Como rodar
+## Executando os Exercícios
 
-### Simulação com mundo vazio
-
-```bash
-ros2 launch nav_bringup sim_empty.launch.py
-```
-
-Sobe:
-- Gazebo Harmonic com o `empty.world`
-- Robô diferencial spawnado em (0, 0, 0.1)
-- `robot_state_publisher` publicando o TF do URDF
-- Bridge ROS ↔ Gazebo
-- RViz com a configuração `nav.rviz`
-
-### Simulação com obstáculos
+### Exercício 2 — Curva Paramétrica
 
 ```bash
-ros2 launch nav_bringup sim_obstacles.launch.py
+ros2 launch nav_parametric_curve curve_follower.launch.py
 ```
 
-Mesma configuração, mas carrega o `obstacles_simple.world`, que contém:
-- Arena 20×20 m delimitada por paredes
-- Três cilindros verdes
-- Duas caixas marrons
-- Uma armadilha em U cinza (para testar mínimo local de campo potencial)
+O robô inicia em (0,0), converge para a lemniscata e circula indefinidamente. No RViz, adicione um display Marker no tópico `/curve_marker` para ver a curva alvo em verde.
 
-### Mover o robô manualmente
+Parâmetros ajustáveis em tempo real:
+```bash
+ros2 param set /curve_follower v_max 0.3
+ros2 param set /curve_follower k_normal 2.0
+```
 
-Em outro terminal:
+### Exercício 3 — Campo Potencial
+
+```bash
+ros2 launch nav_potential_field potential_field.launch.py
+```
+
+Envie metas de duas formas:
+
+Via **RViz** (recomendado): clique no botão "2D Goal Pose" na toolbar e clique no ponto desejado do mapa.
+
+Via **terminal**:
+```bash
+ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped \
+  "{header: {frame_id: 'odom'}, pose: {position: {x: 4.0, y: 0.0}}}"
+```
+
+No RViz, adicione Marker em `/potential_markers` para ver a meta como esfera verde.
+
+### Exercício 1 — Tangent Bug
+
+```bash
+# Terminal 1: launch
+ros2 launch nav_tangent_bug tangent_bug.launch.py
+
+# Terminal 2: enviar meta
+ros2 run nav_tangent_bug tangent_bug_client -- --x 5.0 --y 3.0
+```
+
+O cliente mostra feedback contínuo com o estado atual, distância à meta, e heurísticas d_reach / d_followed:
+
+```
+[motion_to_goal]      d_goal=5.00 d_reach=5.00 d_followed=inf
+[boundary_following]  d_goal=3.50 d_reach=3.50 d_followed=3.50
+[motion_to_goal]      d_goal=1.20 d_reach=1.20 d_followed=3.50
+SUCESSO: goal_reached
+```
+
+Se não houver caminho:
+```
+FALHA: no_path_found
+```
+
+### Exercício 4 — Multi-Robô
+
+```bash
+# 2 robôs (padrão)
+ros2 launch nav_multi_robot multi_robot.launch.py
+
+# 3 robôs
+ros2 launch nav_multi_robot multi_robot.launch.py n_robots:=3
+```
+
+Os robôs iniciam em posições equidistantes num raio de 3 m, convergem para a lemniscata, e circulam evitando obstáculos e uns aos outros.
+
+### Mover o robô manualmente (para debug)
 
 ```bash
 # Andar para frente
-ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.3}}"
+ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.2}}"
 
-# Girar no lugar
+# Girar
 ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist "{angular: {z: 0.5}}"
 
 # Parar
@@ -253,81 +384,24 @@ ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist "{}"
 
 ---
 
-## Validação e diagnóstico
-
-### Verificar tópicos ROS
-
-```bash
-ros2 topic list
-```
-
-Deve listar pelo menos:
-```
-/clock
-/cmd_vel
-/joint_states
-/odom
-/robot_description
-/scan
-/tf
-/tf_static
-```
-
-### Verificar leituras do laser
-
-```bash
-ros2 topic hz /scan          # taxa esperada: ~10 Hz
-ros2 topic echo /scan --once # imprime um LaserScan completo
-```
-
-### Verificar odometria
-
-```bash
-ros2 topic echo /odom --once
-```
-
-### Verificar árvore TF
-
-```bash
-ros2 run tf2_ros tf2_echo odom base_footprint
-```
-
-Deve imprimir translação e rotação a cada segundo. Se der "Could not find a connection", a árvore está quebrada — ver [Troubleshooting](#troubleshooting).
-
-### Inspecionar tópicos do Gazebo
-
-```bash
-gz topic -l                  # lista tópicos do lado Gazebo
-gz topic -i -t /scan         # info de um tópico
-gz model --list              # lista modelos no mundo
-```
-
----
-
-## Pacotes implementados
+## Descrição dos Pacotes
 
 ### `nav_bringup`
 
-Pacote `ament_cmake` que centraliza toda a infraestrutura de simulação. Não contém algoritmos — apenas descrição do robô, mundos e launches que sobem o ambiente.
+Infraestrutura de simulação. Não contém algoritmos — apenas o robô, mundos e launches.
 
-**URDF (`urdf/diff_robot.urdf.xacro`)** — robô diferencial com:
-- Chassis 40×30×15 cm, massa 5 kg
-- Duas rodas ativas (raio 8 cm), separação 34 cm
-- Caster traseiro sem atrito (esfera de apoio)
-- Sensor LIDAR 2D no topo: 360 amostras em 360°, alcance 0.12 m a 8 m, taxa 10 Hz
-- Macros xacro para inércias de caixa, cilindro e esfera (calculadas a partir de massa e dimensões)
+**Robô**: TurtleBot3 Burger com plugins Gazebo Harmonic:
+- DiffDrive (só cmd_vel, sem odom)
+- OdometryPublisher (única fonte de /odom e /tf, posição real)
+- JointStatePublisher
+- GPU Lidar (360 amostras, 5 Hz, alcance 0.12–3.5 m)
 
-**Plugins Gazebo embutidos no URDF:**
-- `DiffDrive` — recebe `/cmd_vel` e move as rodas
-- `OdometryPublisher` — publica `odom → base_footprint` no `/tf`
-- `JointStatePublisher` — publica `/joint_states`
-- Sensor `gpu_lidar` — publica `/scan`
+**Mundos**:
+- `empty.world` — plano vazio (exercício 2)
+- `obstacles_simple.world` — arena 20×20 m com cilindros, caixas e obstáculo em U (exercícios 1 e 3)
+- `obstacles_multi.world` — obstáculos posicionados fora da lemniscata (exercício 4)
 
-**Mundos (`worlds/`):**
-- `empty.world` — plano vazio para o exercício 2 (curva paramétrica)
-- `obstacles_simple.world` — arena 20×20 com cilindros, caixas e obstáculo em U para os exercícios 1 e 3
-
-**Bridge (`config/bridge_params.yaml`)** — mapeia tópicos entre Gazebo e ROS:
+**Bridge** (`bridge_params.yaml`):
 
 | Tópico | Direção | Tipo ROS |
 |---|---|---|
@@ -338,100 +412,195 @@ Pacote `ament_cmake` que centraliza toda a infraestrutura de simulação. Não c
 | `/scan` | GZ → ROS | `sensor_msgs/LaserScan` |
 | `/clock` | GZ → ROS | `rosgraph_msgs/Clock` |
 
-**RViz (`config/rviz/nav.rviz`)** — pré-configurado com displays:
-- Grid
-- RobotModel (lê `/robot_description`)
-- TF (eixos de todos os links)
-- LaserScan em `/scan` (Best Effort QoS)
-- Odometry em `/odom`
-- Fixed Frame: `odom`
+### `nav_common`
 
-**Launches (`launch/`):**
-- `sim_empty.launch.py` — launch base, parametrizável via argumento `world`
-- `sim_obstacles.launch.py` — chama o `sim_empty.launch.py` passando `obstacles_simple.world`
+Utilitários reutilizados por todos os exercícios:
+
+- **`geometry.py`**: `wrap_to_pi`, `yaw_from_quaternion` (via transforms3d), `distance`, `angle_to_target`, `angle_diff`
+- **`diff_drive.py`**: `force_to_twist` — converte vetor de força (Fx,Fy) no frame do mundo para Twist (v,ω) com saturação e alinhamento por cos(erro)
+- **`laser_utils.py`**: `scan_to_points`, `scan_to_polar`, `find_discontinuities` (para Tangent Bug), `closest_obstacle`, `is_path_clear`
+- **`tf_helpers.py`**: wrapper tf2 para obter pose via `TFHelper.get_pose()`
+- **`plotting.py`**: `TrajectoryLogger` para salvar trajetórias em CSV
+
+27 testes unitários cobrindo geometria e laser.
+
+### `nav_msgs_custom`
+
+Define a action `NavigateToGoal` usada pelo Tangent Bug:
+
+```
+# Goal
+geometry_msgs/Point target
+---
+# Result
+bool success
+string message       # "goal_reached" | "no_path_found" | "cancelled"
+---
+# Feedback
+float32 distance_to_goal
+string current_state  # "motion_to_goal" | "boundary_following"
+float32 d_reach
+float32 d_followed
+```
+
+### `nav_parametric_curve`
+
+**`curves.py`**: classes `Lemniscate` e `Cardioid` com métodos `evaluate(t)`, `tangent(t)`, `find_closest_t(x,y)`.
+
+**`vector_field.py`**: campo vetorial que combina componente normal (tanh para convergência suave) e tangente (circulação), com transição automática baseada na distância à curva.
+
+**`curve_follower_node.py`**: nó que subscreve `/odom`, calcula campo, converte para twist, publica `/cmd_vel` a 20 Hz. Publica a curva alvo como Marker no RViz.
+
+### `nav_potential_field`
+
+**`attractive.py`**: potencial atrativo com dois regimes — parabólico (perto, desacelera) e cônico (longe, força constante).
+
+**`repulsive.py`**: potencial repulsivo calculado a partir do LaserScan com transformação de frame laser→mundo. Inclui `compute_repulsive_from_points` para repulsão entre robôs no exercício 4.
+
+**`potential_field_node.py`**: recebe metas via `/goal_pose` (compatível com botão "2D Goal Pose" do RViz). Inclui detecção de mínimo local com wall-following orientado à meta.
+
+**Limitação documentada**: mínimos locais em obstáculos côncavos (formato U). Mitigação via wall-follow com alternância de lado, eficaz para obstáculos convexos.
+
+### `nav_tangent_bug`
+
+**`states.py`**: enum `TBState` com `MOTION_TO_GOAL`, `BOUNDARY_FOLLOWING`, `GOAL_REACHED`, `NO_PATH`.
+
+**`heuristic.py`**: `compute_d_reach` (menor distância à meta via reta livre) e `find_best_tangent_point` (melhor ponto de descontinuidade para contornar).
+
+**`tangent_bug_node.py`**: servidor de action `NavigateToGoal` com:
+- Máquina de estados completa
+- Escolha de lado de contorno via produto vetorial
+- Detecção de estagnação no boundary-following (5s timeout)
+- Detecção de travamento físico (3s sem movimento → recua e gira)
+- Detecção de volta completa (no_path)
+
+**`client_node.py`**: cliente para enviar metas via linha de comando.
+
+### `nav_multi_robot`
+
+**`composition.py`**: `compute_composed_field` que soma ponderadamente:
+- α · F_curva (convergir e circular a lemniscata)
+- β · F_rep_obstáculos (repulsão via laser)
+- γ · F_rep_robôs (repulsão via posições conhecidas)
+
+**`multi_robot_node.py`**: nó por robô que subscreve seu próprio `/robotN/odom` e `/robotN/scan`, mais o `/robotM/odom` dos outros robôs para repulsão mútua.
 
 ---
 
-## Roadmap
+## Parâmetros Configuráveis
 
-| Fase | Pacote | Status | Descrição |
-|---|---|---|---|
-| 0 | — | ✔ | Estrutura do repositório, Git, .gitignore |
-| 1 | `nav_bringup` | ✔ | Simulação, URDF, mundos, launches, RViz |
-| 2 | `nav_common` | ⏳ | Utilitários: geometria, laser, controle diferencial |
-| 3 | `nav_parametric_curve` | ⏳ | Exercício 2 — curva paramétrica |
-| 4 | `nav_potential_field` | ⏳ | Exercício 3 — campo potencial |
-| 5 | `nav_msgs_custom` | ⏳ | Action `NavigateToGoal` |
-| 6 | `nav_tangent_bug` | ⏳ | Exercício 1 — Tangent Bug |
-| 7 | `nav_multi_robot` | ⏳ | Exercício 4 — multi-robô |
-| 8 | `docs/` | ⏳ | Relatório final, vídeos, gráficos |
+Todos os parâmetros são carregados via YAML e podem ser ajustados sem recompilar.
+
+### Exercício 2 (`config/curve_params.yaml`)
+
+| Parâmetro | Default | Descrição |
+|---|---|---|
+| `curve_type` | `lemniscate` | Tipo de curva (`lemniscate` ou `cardioid`) |
+| `curve_scale` | `2.0` | Escala da curva (metade da extensão em x) |
+| `k_normal` | `1.5` | Ganho de convergência |
+| `k_tangent` | `1.0` | Ganho de circulação |
+| `v_max` | `0.22` | Velocidade linear máxima (m/s) |
+
+### Exercício 3 (`config/potential_params.yaml`)
+
+| Parâmetro | Default | Descrição |
+|---|---|---|
+| `k_att` | `1.0` | Ganho atrativo |
+| `k_rep` | `1.0` | Ganho repulsivo |
+| `d0` | `1.2` | Distância de influência dos obstáculos (m) |
+| `goal_tolerance` | `0.15` | Distância para considerar "chegou" (m) |
+| `wall_follow_distance` | `0.35` | Distância da parede no wall-follow (m) |
+
+### Exercício 1 (`config/tangent_bug.yaml`)
+
+| Parâmetro | Default | Descrição |
+|---|---|---|
+| `safe_distance` | `0.50` | Distância para considerar caminho bloqueado (m) |
+| `wall_follow_distance` | `0.45` | Distância da parede no boundary-following (m) |
+| `goal_tolerance` | `0.10` | Tolerância de chegada (m) |
+| `bf_stagnation_timeout` | `5.0` | Timeout de estagnação no BF (s) |
+| `physical_stuck_timeout` | `3.0` | Timeout de travamento físico (s) |
+| `loop_closure_min_travel` | `1.5` | Mínimo percorrido antes de checar volta completa (m) |
+
+### Exercício 4 (`config/multi_robot_params.yaml`)
+
+| Parâmetro | Default | Descrição |
+|---|---|---|
+| `alpha` | `1.0` | Peso do campo da curva |
+| `beta` | `1.0` | Peso da repulsão de obstáculos |
+| `gamma` | `1.5` | Peso da repulsão entre robôs |
+| `k_rep_robot` | `2.0` | Ganho de repulsão inter-robô |
+| `d0_robot` | `1.5` | Distância de influência inter-robô (m) |
+| `n_robots` | `2` | Número de robôs |
 
 ---
 
 ## Troubleshooting
 
-### Erro `Unable to parse the value of parameter robot_description as yaml`
+### Robô não aparece no RViz
 
-**Causa:** o `launch_ros` tenta interpretar o resultado do `xacro` como YAML antes de passar como string.
-**Solução:** o launch já está corrigido usando `ParameterValue(..., value_type=str)` ao redor do `Command(['xacro ', urdf_file])`.
+**Causa**: árvore TF incompleta — falta a transformação `odom → base_footprint`.
+**Verificar**: `ros2 run tf2_ros tf2_echo odom base_footprint`
+**Solução**: confirmar que o plugin `OdometryPublisher` está no URDF com `<tf_topic>tf</tf_topic>`.
 
-### Robô aparece no Gazebo mas não no RViz
+### Odometria diverge da posição real do Gazebo
 
-**Causa mais comum:** a árvore TF está incompleta — falta a transformação `odom → base_footprint`, que precisa vir do plugin DiffDrive ou OdometryPublisher do Gazebo via bridge.
+**Causa**: dois plugins publicando odometria (DiffDrive + OdometryPublisher) com fontes diferentes.
+**Solução**: o DiffDrive deve ter **apenas** `<left_joint>`, `<right_joint>`, `<wheel_separation>`, `<wheel_radius>` e `<topic>`. Sem `<odom_topic>` nem `<tf_topic>`. O OdometryPublisher é a única fonte.
 
-**Diagnóstico:**
-
+**Verificar**:
 ```bash
-ros2 run tf2_ros tf2_echo odom base_footprint
+gz model -m diff_robot --pose       # posição real
+ros2 topic echo /odom --once --field pose.pose.position  # odometria
 ```
+Devem ser praticamente iguais.
 
-Se der "Could not find a connection", o problema é esse.
+### `/scan` não aparece ou não mostra dados
 
-**Solução:** o URDF inclui o plugin `OdometryPublisher` justamente para garantir a publicação dessa transformação. Certifique-se que o bloco está presente em `diff_robot.urdf.xacro`:
-
+**Causa**: plugin `Sensors` ausente no arquivo de mundo.
+**Solução**: verificar que o mundo inclui:
 ```xml
-<gazebo>
-  <plugin filename="gz-sim-odometry-publisher-system"
-          name="gz::sim::systems::OdometryPublisher">
-    <odom_frame>odom</odom_frame>
-    <robot_base_frame>base_footprint</robot_base_frame>
-    <odom_publish_frequency>50</odom_publish_frequency>
-    <tf_topic>tf</tf_topic>
-  </plugin>
-</gazebo>
-```
-
-### `/scan` não aparece em `ros2 topic list`
-
-**Causa:** o plugin `gz::sim::systems::Sensors` não está no arquivo de mundo.
-**Solução:** verifique que o mundo (`empty.world`, `obstacles_simple.world`) inclui o bloco:
-
-```xml
-<plugin filename="gz-sim-sensors-system"
-        name="gz::sim::systems::Sensors">
+<plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
   <render_engine>ogre2</render_engine>
 </plugin>
 ```
 
-### `/scan` aparece mas RViz não mostra os pontos
+### RViz não mostra pontos do laser
 
-**Causa:** mismatch de QoS — Gazebo publica em "Best Effort", RViz por padrão escuta "Reliable".
-**Solução:** no display LaserScan do RViz, mudar `Reliability Policy` para `Best Effort`. O `nav.rviz` já tem essa configuração.
+**Causa**: mismatch de QoS — Gazebo publica em Best Effort.
+**Solução**: no display LaserScan do RViz, mudar Reliability Policy para Best Effort.
+
+### `colcon build` falha no `nav_msgs_custom` com symlink-install
+
+**Causa**: pacotes de interface não suportam `--symlink-install`.
+**Solução**:
+```bash
+colcon build --packages-select nav_msgs_custom          # sem symlink
+colcon build --packages-ignore nav_msgs_custom --symlink-install  # resto com symlink
+```
+
+### Erro `Unable to parse the value of parameter robot_description as yaml`
+
+**Causa**: o launch_ros tenta interpretar o URDF como YAML.
+**Solução**: usar `ParameterValue(..., value_type=str)` ao redor do conteúdo do URDF no launch file.
+
+### Robô fica travado contra obstáculo (Tangent Bug)
+
+**Causa**: o wall-follow perdeu contato com o obstáculo (cilindros pequenos).
+**Solução**: o nó inclui detecção de estagnação (5s) e travamento físico (3s). Quando detecta, recua, gira e tenta novamente.
+
+### Mínimo local no campo potencial (obstáculo em U)
+
+**Causa**: limitação fundamental do método — atrativo e repulsivo se cancelam.
+**Resultado esperado**: o robô pode ficar preso. Documentado no relatório como limitação conhecida, com comparação ao Tangent Bug que resolve o cenário.
 
 ### Gazebo abre tela preta no WSL
 
-**Causa:** problema de aceleração gráfica.
-**Solução:**
-```bash
-export LIBGL_ALWAYS_SOFTWARE=1
-ros2 launch nav_bringup sim_empty.launch.py
-```
-Mais lento, mas funciona.
+**Solução**: `export LIBGL_ALWAYS_SOFTWARE=1` antes do launch.
 
 ### Processos órfãos do Gazebo
 
-Se o Gazebo travar e fechar mal, processos podem ficar pendurados e impedir o próximo launch:
-
+Se o Gazebo travar ao fechar:
 ```bash
 pkill -9 -f "gz sim"
 pkill -9 -f "parameter_bridge"
@@ -439,22 +608,55 @@ pkill -9 -f "rviz2"
 pkill -9 -f "robot_state_publisher"
 ```
 
-### Avisos `RTPS_TRANSPORT_SHM Error`
+### Warnings `RTPS_TRANSPORT_SHM Error`
 
 Inofensivos no WSL — relacionados a memória compartilhada do Fast DDS. Podem ser ignorados.
 
 ---
 
+## Validação Rápida
+
+Script para verificar que tudo está funcionando:
+
+```bash
+source ~/ros2_ws/install/setup.bash
+
+# 1. Tópicos disponíveis
+ros2 topic list
+
+# 2. Laser publicando
+ros2 topic hz /scan
+
+# 3. Odometria consistente
+gz model -m diff_robot --pose
+ros2 topic echo /odom --once --field pose.pose.position
+
+# 4. TF conectado
+ros2 run tf2_ros tf2_echo odom base_footprint
+
+# 5. Robô se move
+ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.1}}"
+
+# 6. Interfaces customizadas
+ros2 interface show nav_msgs_custom/action/NavigateToGoal
+
+# 7. Testes unitários
+colcon test --packages-select nav_common && colcon test-result --verbose
+```
+
+---
+
 ## Referências
 
-- [Documentação oficial ROS 2 Jazzy](https://docs.ros.org/en/jazzy/)
+- [ROS 2 Jazzy Documentation](https://docs.ros.org/en/jazzy/)
 - [Gazebo Harmonic Documentation](https://gazebosim.org/docs/harmonic)
-- [ros_gz tutorials](https://github.com/gazebosim/ros_gz)
-- [URDF Tutorials](https://docs.ros.org/en/jazzy/Tutorials/Intermediate/URDF/URDF-Main.html)
+- [ros_gz Integration](https://github.com/gazebosim/ros_gz)
+- [TurtleBot3 Documentation](https://emanual.robotis.com/docs/en/platform/turtlebot3/overview/)
+- Choset, H. et al. *Principles of Robot Motion: Theory, Algorithms, and Implementations*. MIT Press, 2005. (Tangent Bug, Potential Fields, Bug Algorithms)
 
 ---
 
 ## Autor
 
-Gabriel Vaz Cançado Ferreira - gabrielvazcancadoferreira@gmail.com
-Philip Ribeiro Costa
+Gabriel V. C. F. — Engenharia Elétrica, UFMG
+Trabalho de Robótica Móvel
