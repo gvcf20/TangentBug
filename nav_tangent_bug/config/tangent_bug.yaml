@@ -3,16 +3,14 @@ tangent_bug:
     v_max: 0.22
     omega_max: 2.84
     k_omega: 2.5
-    goal_tolerance: 0.20
-    safe_distance: 0.30              # distância para considerar "bloqueado"
-    wall_follow_distance: 0.35       # distância da parede no boundary-following
-    discontinuity_threshold: 0.5     # limiar para detectar quinas no laser
+    goal_tolerance: 0.2
+    safe_distance: 0.50              # era 0.30 — detecta obstáculo mais cedo
+    wall_follow_distance: 0.45       # era 0.35 — mantém mais distância da parede
+    discontinuity_threshold: 0.5
     control_rate: 20.0
-
-    # Detecção de volta completa (no_path)
-    loop_closure_dist: 0.3           # distância para fechar o loop (m)
-    loop_closure_min_travel: 1.5     # mínimo percorrido antes de checar loop (m)
-
-    # Logging
+    loop_closure_dist: 0.3
+    loop_closure_min_travel: 1.5
+    bf_stagnation_timeout: 5.0
+    physical_stuck_timeout: 3.0      # novo: detecta travamento físico
     log_trajectory: true
     log_file: '/tmp/tangent_bug_trajectory.csv'

@@ -40,13 +40,14 @@ class TangentBugNode(Node):
         self.declare_parameter('v_max', 0.22)
         self.declare_parameter('omega_max', 2.84)
         self.declare_parameter('k_omega', 2.5)
-        self.declare_parameter('goal_tolerance', 0.15)
+        self.declare_parameter('goal_tolerance', 0.10)
         self.declare_parameter('safe_distance', 0.30)
         self.declare_parameter('wall_follow_distance', 0.35)
         self.declare_parameter('discontinuity_threshold', 0.5)
         self.declare_parameter('control_rate', 20.0)
         self.declare_parameter('loop_closure_dist', 0.3)
         self.declare_parameter('loop_closure_min_travel', 1.5)
+        self.declare_parameter('bf_stagnation_timeout', 5.0)
         self.declare_parameter('log_trajectory', True)
         self.declare_parameter('log_file', '/tmp/tangent_bug_trajectory.csv')
 
@@ -60,6 +61,7 @@ class TangentBugNode(Node):
         self.control_rate = self.get_parameter('control_rate').value
         self.loop_closure_dist = self.get_parameter('loop_closure_dist').value
         self.loop_closure_min_travel = self.get_parameter('loop_closure_min_travel').value
+        self.bf_stagnation_timeout = self.get_parameter('bf_stagnation_timeout').value
 
         # Estado do robô
         self.robot_x = 0.0
@@ -68,7 +70,7 @@ class TangentBugNode(Node):
         self.odom_received = False
         self.last_scan = None
 
-        # Callback groups para permitir action + subscribers concorrentes
+        # Callback groups
         cb_group = ReentrantCallbackGroup()
 
         # Subscribers
@@ -103,13 +105,9 @@ class TangentBugNode(Node):
             self.logger_traj = TrajectoryLogger(
                 log_file, extra_fields=['state', 'd_reach', 'd_followed'])
 
-        self.get_logger().info(
-            'Tangent Bug pronto. Envie meta via:\n'
-            '  ros2 run nav_tangent_bug tangent_bug_client -- --x 5.0 --y 3.0\n'
-            '  ou ros2 action send_goal /navigate_to_goal '
-            'nav_msgs_custom/action/NavigateToGoal "{target: {x: 5.0, y: 3.0}}"')
+        self.get_logger().info('Tangent Bug pronto. Envie meta via tangent_bug_client.')
 
-    # ─── Callbacks de sensor ─────────────────────────────────────
+    # ─── Callbacks ───────────────────────────────────────────────
 
     def odom_cb(self, msg):
         self.robot_x = msg.pose.pose.position.x
@@ -119,8 +117,6 @@ class TangentBugNode(Node):
 
     def scan_cb(self, msg):
         self.last_scan = msg
-
-    # ─── Action callbacks ────────────────────────────────────────
 
     def goal_cb(self, goal_request):
         self.get_logger().info(
@@ -132,17 +128,13 @@ class TangentBugNode(Node):
         self.get_logger().info('Cancelamento solicitado.')
         return CancelResponse.ACCEPT
 
-    def execute_cb(self, goal_handle):
-        """Executa o algoritmo Tangent Bug.
+    # ─── Execute ─────────────────────────────────────────────────
 
-        Essa função roda em loop até que a meta seja alcançada,
-        o caminho seja declarado inexistente, ou a action seja cancelada.
-        """
+    def execute_cb(self, goal_handle):
         target = goal_handle.request.target
         goal_x, goal_y = target.x, target.y
 
-        self.get_logger().info(
-            f'Navegando para ({goal_x:.2f}, {goal_y:.2f})')
+        self.get_logger().info(f'Navegando para ({goal_x:.2f}, {goal_y:.2f})')
         self.publish_goal_marker(goal_x, goal_y)
 
         # Inicialização
@@ -150,13 +142,17 @@ class TangentBugNode(Node):
         d_followed = float('inf')
         d_reach = float('inf')
 
-        # Para detecção de loop (volta completa no obstáculo)
+        # Boundary-following tracking
         bf_start_x = 0.0
         bf_start_y = 0.0
         bf_total_travel = 0.0
         bf_prev_x = 0.0
         bf_prev_y = 0.0
-        wf_side = 1.0  # +1=esquerda, -1=direita
+        wf_side = 1.0
+
+        # Detecção de estagnação
+        bf_best_dist = float('inf')
+        bf_best_dist_time = 0.0
 
         rate = self.create_rate(self.control_rate)
         feedback_msg = NavigateToGoal.Feedback()
@@ -164,13 +160,12 @@ class TangentBugNode(Node):
 
         while rclpy.ok():
             try:
-                # Verifica cancelamento
+                # Cancelamento
                 if goal_handle.is_cancel_requested:
                     self.pub_cmd.publish(Twist())
                     goal_handle.canceled()
                     result_msg.success = False
                     result_msg.message = 'cancelled'
-                    self.get_logger().info('Navegação cancelada.')
                     return result_msg
 
                 # Espera dados
@@ -181,10 +176,9 @@ class TangentBugNode(Node):
                 dist_to_goal = distance(
                     (self.robot_x, self.robot_y), (goal_x, goal_y))
 
-                # ─── GOAL_REACHED ────────────────────────────────
+                # ─── GOAL REACHED ────────────────────────────
                 if dist_to_goal <= self.goal_tol:
                     self.pub_cmd.publish(Twist())
-                    state = TBState.GOAL_REACHED
                     result_msg.success = True
                     result_msg.message = 'goal_reached'
                     self.get_logger().info(
@@ -195,14 +189,13 @@ class TangentBugNode(Node):
                         self.get_logger().warn(f'Erro ao finalizar action: {e}')
                     return result_msg
 
-                # Calcula heurísticas
                 scan = self.last_scan
                 d_reach = compute_d_reach(
                     self.robot_x, self.robot_y, self.robot_yaw,
                     goal_x, goal_y, scan)
                 disconts = find_discontinuities(scan, self.disc_thresh)
 
-                # ─── MOTION_TO_GOAL ──────────────────────────────
+                # ─── MOTION TO GOAL ──────────────────────────
                 if state == TBState.MOTION_TO_GOAL:
                     angle_to_goal_laser = angle_diff(
                         angle_to_target(
@@ -215,28 +208,24 @@ class TangentBugNode(Node):
                         safe_distance=self.safe_dist)
 
                     if path_free:
-                        fx = goal_x - self.robot_x
-                        fy = goal_y - self.robot_y
-                        mag = math.hypot(fx, fy)
-                        if mag > 1e-6:
-                            fx /= mag
-                            fy /= mag
-                        twist = force_to_twist(
-                            fx, fy, self.robot_yaw,
-                            v_max=self.v_max,
-                            omega_max=self.omega_max,
-                            k_omega=self.k_omega)
+                        twist = self._go_toward(goal_x, goal_y)
                     else:
+                        # Entra em boundary-following
                         state = TBState.BOUNDARY_FOLLOWING
                         d_followed = dist_to_goal
 
-                        best = find_best_tangent_point(
-                            self.robot_x, self.robot_y, self.robot_yaw,
-                            goal_x, goal_y, scan, disconts)
-
-                        if best is not None:
-                            best_angle, _, _ = best
-                            wf_side = 1.0 if best_angle > 0 else -1.0
+                        # Escolhe lado pelo produto vetorial
+                        obs = closest_obstacle(scan)
+                        if obs is not None:
+                            obs_range, obs_angle, _ = obs
+                            ox = self.robot_x + obs_range * math.cos(self.robot_yaw + obs_angle)
+                            oy = self.robot_y + obs_range * math.sin(self.robot_yaw + obs_angle)
+                            to_obs_x = ox - self.robot_x
+                            to_obs_y = oy - self.robot_y
+                            to_goal_x = goal_x - self.robot_x
+                            to_goal_y = goal_y - self.robot_y
+                            cross = to_obs_x * to_goal_y - to_obs_y * to_goal_x
+                            wf_side = 1.0 if cross > 0 else -1.0
                         else:
                             wf_side = 1.0
 
@@ -245,15 +234,17 @@ class TangentBugNode(Node):
                         bf_prev_x = self.robot_x
                         bf_prev_y = self.robot_y
                         bf_total_travel = 0.0
+                        bf_best_dist = dist_to_goal
+                        bf_best_dist_time = self.get_clock().now().nanoseconds / 1e9
 
                         self.get_logger().info(
-                            f'Obstáculo detectado. Boundary-following '
-                            f'lado {"esquerdo" if wf_side > 0 else "direito"}, '
-                            f'd_followed={d_followed:.2f}')
+                            f'Obstáculo detectado. BF '
+                            f'lado {"esq" if wf_side > 0 else "dir"}, '
+                            f'd={d_followed:.2f}')
 
                         twist = self._wall_follow(scan, wf_side)
 
-                # ─── BOUNDARY_FOLLOWING ──────────────────────────
+                # ─── BOUNDARY FOLLOWING ──────────────────────
                 elif state == TBState.BOUNDARY_FOLLOWING:
                     if dist_to_goal < d_followed:
                         d_followed = dist_to_goal
@@ -265,6 +256,23 @@ class TangentBugNode(Node):
                     bf_prev_x = self.robot_x
                     bf_prev_y = self.robot_y
 
+                    # Detecção de estagnação
+                    now_ts = self.get_clock().now().nanoseconds / 1e9
+                    if dist_to_goal < bf_best_dist - 0.05:
+                        bf_best_dist = dist_to_goal
+                        bf_best_dist_time = now_ts
+                    elif (now_ts - bf_best_dist_time) > self.bf_stagnation_timeout:
+                        state = TBState.MOTION_TO_GOAL
+                        d_followed = float('inf')
+                        bf_best_dist = float('inf')
+                        self.get_logger().warn(
+                            'Estagnação no BF. Voltando para MTG.')
+                        twist = self._go_toward(goal_x, goal_y)
+                        self.pub_cmd.publish(twist)
+                        rate.sleep()
+                        continue
+
+                    # Caminho direto livre?
                     angle_to_goal_laser = angle_diff(
                         angle_to_target(
                             (self.robot_x, self.robot_y), (goal_x, goal_y)),
@@ -277,57 +285,29 @@ class TangentBugNode(Node):
                     if path_free and bf_total_travel > 0.3:
                         state = TBState.MOTION_TO_GOAL
                         self.get_logger().info(
-                            f'Caminho livre detectado! '
-                            f'd_goal={dist_to_goal:.2f}, '
-                            f'd_reach={d_reach:.2f}, d_followed={d_followed:.2f}')
-                        fx = goal_x - self.robot_x
-                        fy = goal_y - self.robot_y
-                        mag = math.hypot(fx, fy)
-                        if mag > 1e-6:
-                            fx /= mag
-                            fy /= mag
-                        twist = force_to_twist(
-                            fx, fy, self.robot_yaw,
-                            v_max=self.v_max,
-                            omega_max=self.omega_max,
-                            k_omega=self.k_omega)
+                            f'Caminho livre! d={dist_to_goal:.2f}')
+                        twist = self._go_toward(goal_x, goal_y)
 
                     elif d_reach < d_followed - 0.05:
                         state = TBState.MOTION_TO_GOAL
                         self.get_logger().info(
-                            f'Atalho encontrado! '
-                            f'd_reach={d_reach:.2f} < d_followed={d_followed:.2f}')
-                        best = find_best_tangent_point(
-                            self.robot_x, self.robot_y, self.robot_yaw,
-                            goal_x, goal_y, scan, disconts)
-                        if best is not None:
-                            best_angle = best[0]
-                            fx = math.cos(self.robot_yaw + best_angle)
-                            fy = math.sin(self.robot_yaw + best_angle)
-                        else:
-                            fx = goal_x - self.robot_x
-                            fy = goal_y - self.robot_y
-                            mag = math.hypot(fx, fy)
-                            if mag > 1e-6:
-                                fx /= mag
-                                fy /= mag
-                        twist = force_to_twist(
-                            fx, fy, self.robot_yaw,
-                            v_max=self.v_max,
-                            omega_max=self.omega_max,
-                            k_omega=self.k_omega)
+                            f'Atalho! d_reach={d_reach:.2f} < '
+                            f'd_followed={d_followed:.2f}')
+                        twist = self._go_toward(goal_x, goal_y)
 
                     elif (bf_total_travel > self.loop_closure_min_travel and
                           distance((self.robot_x, self.robot_y),
                                    (bf_start_x, bf_start_y)) < self.loop_closure_dist):
-                        state = TBState.NO_PATH
                         self.pub_cmd.publish(Twist())
                         result_msg.success = False
                         result_msg.message = 'no_path_found'
-                        goal_handle.succeed()
                         self.get_logger().warn(
-                            f'Sem caminho! Volta completa detectada após '
-                            f'{bf_total_travel:.1f} m percorridos.')
+                            f'Sem caminho! Volta completa após '
+                            f'{bf_total_travel:.1f} m.')
+                        try:
+                            goal_handle.succeed()
+                        except Exception:
+                            pass
                         return result_msg
 
                     else:
@@ -335,14 +315,13 @@ class TangentBugNode(Node):
 
                 self.pub_cmd.publish(twist)
 
-                # Publica feedback
+                # Feedback
                 feedback_msg.distance_to_goal = float(dist_to_goal)
                 feedback_msg.current_state = state.name.lower()
                 feedback_msg.d_reach = float(d_reach)
                 feedback_msg.d_followed = float(d_followed)
                 goal_handle.publish_feedback(feedback_msg)
 
-                # Log
                 if self.logger_traj:
                     self.logger_traj.log(
                         self.robot_x, self.robot_y, self.robot_yaw,
@@ -351,28 +330,33 @@ class TangentBugNode(Node):
                         d_followed=round(d_followed, 4))
 
             except Exception as e:
-                self.get_logger().error(f'Erro no loop de controle: {e}')
+                self.get_logger().error(f'Erro: {e}')
                 self.pub_cmd.publish(Twist())
 
             rate.sleep()
 
-        # Se saiu do loop (shutdown)
         self.pub_cmd.publish(Twist())
         result_msg.success = False
         result_msg.message = 'shutdown'
         goal_handle.abort()
         return result_msg
 
-    # ─── Wall-following ──────────────────────────────────────────
+    # ─── Helpers ─────────────────────────────────────────────────
+
+    def _go_toward(self, goal_x, goal_y) -> Twist:
+        fx = goal_x - self.robot_x
+        fy = goal_y - self.robot_y
+        mag = math.hypot(fx, fy)
+        if mag > 1e-6:
+            fx /= mag
+            fy /= mag
+        return force_to_twist(
+            fx, fy, self.robot_yaw,
+            v_max=self.v_max,
+            omega_max=self.omega_max,
+            k_omega=self.k_omega)
 
     def _wall_follow(self, scan: LaserScan, side: float) -> Twist:
-        """Segue a parede do obstáculo mantendo distância fixa.
-
-        Args:
-            scan: LaserScan atual
-            side: +1.0 para seguir com parede à esquerda,
-                  -1.0 para seguir com parede à direita
-        """
         twist = Twist()
         n = len(scan.ranges)
         if n == 0:
@@ -386,12 +370,10 @@ class TangentBugNode(Node):
                 continue
             angle = scan.angle_min + i * scan.angle_increment
 
-            # Frente: |angle| < 30°
             if abs(angle) < math.radians(30):
                 if r < front_min:
                     front_min = r
 
-            # Lado de contorno
             if side > 0:
                 if math.radians(30) < angle < math.radians(120):
                     if r < side_min:
@@ -401,19 +383,16 @@ class TangentBugNode(Node):
                     if r < side_min:
                         side_min = r
 
-        # 1. Obstáculo na frente → gira
         if front_min < self.wf_dist * 1.5:
             twist.linear.x = 0.05
             twist.angular.z = self.omega_max * 0.5 * side
             return twist
 
-        # 2. Não vê parede lateral → gira na direção da parede
         if side_min == float('inf') or side_min > self.wf_dist * 3:
             twist.linear.x = self.v_max * 0.4
             twist.angular.z = -0.8 * side
             return twist
 
-        # 3. Mantém distância
         dist_error = side_min - self.wf_dist
         angular_correction = -side * 1.5 * dist_error
 
@@ -421,8 +400,6 @@ class TangentBugNode(Node):
         twist.angular.z = max(-self.omega_max,
                               min(self.omega_max, angular_correction))
         return twist
-
-    # ─── Markers ─────────────────────────────────────────────────
 
     def publish_goal_marker(self, gx, gy):
         marker = Marker()
