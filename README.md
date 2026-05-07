@@ -1,4 +1,4 @@
-# Trabalho de Robótica Móvel — Navegação Reativa com ROS 2
+# Trabalho de Planejamento de Movimento de Robôs — Navegação Reativa com ROS 2
 
 Repositório do trabalho de robótica móvel implementado em **ROS 2 Jazzy** com **Gazebo Harmonic**, usando o **TurtleBot3 Burger** como plataforma de simulação. O projeto implementa quatro estratégias de navegação para robôs com acionamento diferencial equipados com sensor laser.
 
